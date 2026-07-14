@@ -1,0 +1,959 @@
+---
+title: "School-to-Work Pathways: Cluster Analysis"
+subtitle: "Module 3 of 3 — Using Synthetic Longitudinal Data"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width  = 10,
+  fig.height = 6
+)
+```
+
+---
+
+# Overview
+
+This is the third and final module on studying school-to-work pathways in 
+longitudinal administrative data.
+
+In Module 2, we computed a pairwise **Optimal Matching distance matrix** that 
+captures how similar or different each pair of student sequences is. In this 
+module we use that distance matrix as the input to **cluster analysis** which is 
+a method for grouping students with similar trajectories into meaningful pathway 
+clusters.
+
+This module covers:
+
+1. Choosing a clustering method
+2. Determining the number of clusters
+3. Running the final clustering
+4. Visualizing and labeling clusters
+5. Validating clusters using demographics and outcomes
+6. Examining disparities in pathway participation
+
+
+**Output files**
+This module produces the following output file, which is saved to the 
+longitudinal_toy_data/ folder:
+
+-final_results_with_clusters.csv — one row per student with demographic 
+characteristics, high school records, credential attainment, labor market 
+outcomes, and pathway cluster membership merged into a single analysis-ready file.
+
+
+**A note on package versions:** The code in this module was developed and tested 
+using specific versions of R and its packages. If you encounter unexpected 
+errors or differences in output, it may be due to package version differences. 
+See the [Session information] section at the end of this module for the full 
+list of package versions used in development. You can check your own package 
+versions by running sessionInfo() in your RStudio console, and update packages 
+by running update.packages().
+
+---
+
+# 1. Setup
+
+## 1.1 Load packages
+
+```{r load-packages}
+library(tidyverse)
+library(TraMineR)        # sequence visualization
+library(cluster)         # agnes() for hierarchical clustering
+library(WeightedCluster) # cluster quality statistics and tools
+library(scales)
+library(knitr)
+library(kableExtra)
+library(ggridges)        # for ridge/density plots by group
+
+# Install any missing packages:
+#install.packages(c("cluster", "WeightedCluster", "ggridges"))
+
+```
+
+## 1.2 Load data
+
+```{r load-data}
+data_dir <- "longitudinal_toy_data"
+
+# Load the distance matrix and sequence object saved in Module 2
+dist_om  <- readRDS(file.path(data_dir, "dist_om.rds"))
+seqdata  <- readRDS(file.path(data_dir, "seqdata.rds"))
+
+# Load the flat analysis file and student demographics
+analysis_flat  <- read_csv(file.path(data_dir, "analysis_flat.csv"))
+students       <- read_csv(file.path(data_dir, "students.csv"))
+combined_wide  <- read_csv(file.path(data_dir, "combined_seq_wide.csv"))
+
+# Load the archetype key — this is the "ground truth" we can use to 
+# validate whether our clustering recovers the known pathway groups
+archetype_key  <- read_csv(file.path(data_dir, "archetype_key.csv"))
+```
+
+---
+
+# 2. Choosing a clustering method
+
+## 2.1 Why hierarchical clustering?
+
+There are many clustering methods available. For sequence analysis in social 
+science, **agglomerative hierarchical clustering** with Ward's linkage criterion 
+is by far the most common choice. Here is why:
+
+- **No need to prespecify k:** Hierarchical clustering builds a full tree 
+  (dendrogram) from which you can cut at any level. This lets you explore 
+  different numbers of clusters before committing.
+- **Ward's linkage:** At each step, it merges the two clusters whose merger 
+  minimizes the increase in total within-cluster variance. This tends to produce 
+  compact, balanced clusters that are desirable for pathway research.
+- **Works with a distance matrix:** Because we already have a precomputed 
+  distance matrix from Optimal Matching, we can feed it directly into the 
+  clustering algorithm.
+
+Alternative methods you might encounter:
+
+* agnes(ward): Uses Ward linkage, the most common approach for OM distances. 
+Tends to produce compact, evenly sized clusters.
+
+*agnes(complete): Uses complete linkage. Tends to produce unequal cluster sizes, 
+with some clusters much larger than others.
+
+*agnes(average): Uses average linkage. More sensitive to outliers than Ward or 
+complete linkage.
+
+*k-medoids (pam): A good alternative to hierarchical clustering that can produce 
+more robust results. Worth considering if your clusters are not well-separated, 
+though it runs more slowly on large datasets.
+
+
+
+## 2.2 Run the hierarchical clustering
+
+```{r run-clustering}
+# agnes() from the cluster package fits agglomerative hierarchical clustering.
+# method = "ward" uses Ward's minimum variance linkage.
+# diss = TRUE tells it that the input is a dissimilarity/distance matrix,
+#   not raw data.
+
+cat("Running hierarchical clustering (Ward linkage)...\n")
+
+hc <- agnes(
+  x      = dist_om,
+  diss   = TRUE,
+  method = "ward"
+)
+
+cat("Clustering complete.\n")
+cat("Agglomerative coefficient:", round(hc$ac, 3),
+    "  (closer to 1 = stronger cluster structure)\n")
+```
+
+## 2.3 Visualize the dendrogram
+
+The **dendrogram** shows the full hierarchical tree.  Each leaf at the bottom 
+represents a student, and the branches show how students are progressively 
+grouped together into clusters based on the similarity of their sequences. The
+height of each branch (shown on the y-axis as OM distance) indicates how 
+dissimilar the groups being merged are at that point. Branches that merge low on 
+the chart indicate students with very similar pathways, while branches that 
+merge high indicate groups that are quite different from each other.
+The three dashed horizontal lines show where the dendrogram would be "cut" to 
+produce different numbers of clusters. Cutting at the teal line (k = 5) produces 
+5 clusters, cutting at the orange line (k = 8) produces 8 clusters, and cutting 
+at the red line (k = 12) produces 12 clusters. The higher the cut line, the
+fewer and broader the clusters; the lower the cut line, the more and finer the 
+clusters.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+The dendrogram shows two very broad groupings at the highest level, reflecting a 
+fundamental divide in the cohort that likely separates students who enrolled in 
+postsecondary education from those who did not. Within each of those broad 
+groups, finer subdivisions emerge as the cut line moves lower. The relatively 
+large jump in height before the final merge at the top of the chart suggests 
+that a solution with fewer than 12 clusters may be sufficient to capture the 
+main pathway patterns without overfitting. The cluster fit statistics in the 
+next section will help determine the most appropriate number of clusters for 
+this data.
+
+```{r dendrogram, fig.height=5}
+# pltree() plots the hierarchical clustering tree
+# We only show the top portion (hang = -1, labels = FALSE) since 5,000 
+# individual labels would be unreadable
+pltree(
+  hc,
+  main   = "Hierarchical Clustering Dendrogram (Ward Linkage)",
+  labels = FALSE,
+  hang   = -1,
+  ylab   = "Height (OM distance)"
+)
+
+# Add reference lines at several potential cut points
+abline(h = c(3, 4, 5), col = c("#E84855", "#F4A261", "#2CA25F"),
+       lty = 2, lwd = 1.5)
+legend("topright",
+       legend = c("k ≈ 12 cut", "k ≈ 8 cut", "k ≈ 5 cut"),
+       col    = c("#E84855", "#F4A261", "#2CA25F"),
+       lty    = 2, lwd = 1.5, cex = 0.9)
+```
+
+---
+
+# 3. Choosing the number of clusters
+
+## 3.1 Statistical quality criteria
+
+The `WeightedCluster` package provides a suite of cluster quality statistics 
+that help evaluate different values of k. We compute these across a range of k 
+values and look for the one that optimizes the criteria.
+
+Key statistics:
+
+- **ASW (Average Silhouette Width):** How well each observation fits its cluster 
+versus the next-best alternative. Higher is better, with a maximum of 1.
+
+- **CH (Calinski-Harabasz index):** Ratio of between-cluster to within-cluster 
+variance. Higher is better.
+
+- **R2 (R-squared):** Proportion of total variance explained by the cluster 
+solution. Higher is better.
+
+- **HG (Hubert's Gamma):** Rank correlation between distances and cluster 
+membership. Higher is better.
+
+
+None of these is definitive, so use them alongside domain knowledge and the 
+interpretability of resulting clusters.
+
+
+
+The chart below shows four cluster quality statistics (ASW, CH, R2, and HG) 
+plotted across a range of possible cluster solutions from 2 to 15 clusters. The 
+statistics have been standardized so they can be displayed on the same scale, 
+with higher values indicating a better-fitting solution for all four measures. 
+The goal is to identify a number of clusters where the statistics stabilize or 
+show a notable peak, similar to looking for an "elbow" in the line.
+
+
+**Example Interpretation (Remember Data Are Synthetic)**
+All four statistics show their highest values at k = 2, meaning a two-cluster 
+solution fits the data best in a purely statistical sense. However, a 
+two-cluster solution is rarely useful for policy research because it likely just 
+separates students who enrolled in postsecondary education from those who did 
+not, without capturing the meaningful variation within those broad groups.
+Looking further along the x-axis, the statistics generally decline and begin to 
+flatten out around k = 8 to 10, with no strong peaks emerging at higher values. 
+R2 and HG show a slight upward trend continuing beyond k = 10, suggesting that 
+adding more clusters continues to explain additional variation, though with 
+diminishing returns.
+
+In practice, choosing a cluster solution requires balancing statistical fit with 
+interpretability. A solution in the range of k = 8 to 12 is worth exploring, as 
+it is large enough to capture meaningful pathway distinctions while remaining 
+manageable to interpret and communicate to a policy audience. The sequence index 
+plots by cluster (see below) and your substantive knowledge should guide the 
+final decision.
+```{r cluster-quality, fig.height=7}
+# as.clustrange() computes quality statistics for k = 2 through ncluster
+# This can take a moment on large datasets
+wc_stats <- as.clustrange(
+  object   = hc,
+  diss     = dist_om,
+  ncluster = 15    # evaluate k = 2 through 15
+)
+
+# Plot all quality statistics across k values
+# Each panel shows a different criterion; look for peaks or elbows
+plot(
+  wc_stats,
+  stat     = c("ASW", "CH", "R2", "HG"),
+  norm     = "zscore",   # z-score normalizes criteria to the same scale
+  main     = "Cluster Quality Statistics by Number of Clusters"
+)
+```
+
+This table shows the top 3 cluster solutions for each of 10 quality criteria, 
+ranked from best to worst within each criterion. For each criterion, the table 
+shows the number of clusters (N groups) and the corresponding statistic value. 
+Higher values indicate better fit for all criteria shown.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+The results are mixed, which is typical for cluster analysis. A few patterns 
+stand out:
+-Several criteria (ASW, ASWw, CH, CHsq, and PBC) favor smaller solutions in the 
+range of k = 2 to 5, reflecting the fact that a small number of broad groups 
+explains a large share of the overall variation. This is statistically sensible 
+but may not be substantively useful for policy research.
+
+-On the other hand, HG, HGSD, R2, R2sq, and HC consistently favor larger 
+solutions in the range of k = 13 to 15, suggesting that finer distinctions 
+between pathways continue to improve fit even at higher values of k.
+
+The lack of consensus across criteria is actually useful information. 
+It suggests that there is no single objectively correct number of clusters and 
+that the final decision should be guided by what is most meaningful and 
+interpretable for your research question. For demonstration purposes, we have 
+selected a 12-cluster solution to align with the findings from the Sequences to
+Success Project. 
+```{r quality-table}
+# Print the quality statistics as a table for closer inspection
+summary(wc_stats, max.rank = 3) %>%
+  kable(caption = "Top 3 cluster solutions by each quality criterion") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## 3.2 Practical considerations
+
+Statistical criteria help narrow the choice, but the final decision should 
+also consider:
+
+- **Interpretability:** Do the clusters correspond to meaningfully different 
+  pathways that can be labeled and communicated to a policy audience?
+  
+- **Cluster size:** Very small clusters (e.g., < 1% of the sample) may not 
+  be substantively meaningful or statistically stable.
+  
+- **Research question:** If you are trying to recover a known typology 
+  (as we are here), prior theory should guide k.
+  
+- **Stability:** Run the clustering on a bootstrap sample and check whether 
+  the same clusters emerge.
+
+For this synthetic dataset, **k = 12** is the known number of pathway archetypes. 
+We will use that as our target.
+
+
+**Things to Check for When Comparing Different Values of k:** 
+-Which pathways get merged together when k is smaller? 
+
+-Does the reduced granularity change any substantive conclusions about earnings 
+differences across pathways?
+
+-Are any clusters very small (e.g., less than 2-3% of the sample)? Very small 
+clusters may reflect outlier sequences rather than a meaningful pathway group 
+and could be a sign that k is too large.
+
+-Are any clusters very large (e.g., more than 30-40% of the sample)? Dominant 
+clusters may be masking important variation and could be a sign that k 
+is too small.
+
+-Do the pathway labels still make substantive sense? A solution that is 
+statistically optimal but produces clusters that are difficult to name or 
+explain to a policy audience may not be the most useful choice.
+
+-How stable are the clusters? If moving from k to k+1 causes many students to 
+shift clusters dramatically, that may indicate the solution is sensitive to the 
+choice of k.
+
+-Do subgroup patterns hold across different values of k? For example, if FRPL 
+students are overrepresented in a particular pathway at k=12, does that pattern 
+persist at k=8 or k=10?
+
+-Does the solution align reasonably with what you know about the population? 
+
+---
+
+# 4. Assigning cluster membership
+Once you have selected a cluster solution, the final step is to assign each 
+student to a cluster. The cutree() function cuts the dendrogram at your chosen 
+value of k and returns a cluster membership vector with one value per student. 
+This vector is then added to the data as a new variable so that cluster 
+membership can be used in subsequent analyses. The table below shows the size of 
+each cluster, which is worth reviewing to check for very small or very large 
+clusters that might warrant revisiting your choice of k.
+```{r assign-clusters}
+# cutree() cuts the dendrogram at k clusters and returns a membership vector
+# (one value per student, indicating which cluster they belong to)
+cluster_k12 <- cutree(hc, k = 12)
+
+# Add cluster membership to the combined_wide table
+combined_wide <- combined_wide %>%
+  mutate(cluster = cluster_k12)
+
+# Quick look at cluster sizes
+table(cluster_k12) %>%
+  as.data.frame() %>%
+  rename(Cluster = cluster_k12, N = Freq) %>%
+  mutate(Pct = percent(N / sum(N), accuracy = 0.1)) %>%
+  arrange(Cluster) %>%
+  kable(caption = "Cluster sizes (k = 12)") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+---
+
+# 5. Visualizing clusters
+
+## 5.1 State distribution plots by cluster
+
+The best way to understand what each cluster represents is to plot the state 
+distribution for each cluster separately. Looking at these plots will help you
+describe the school-to-work pathway(s) captued by each.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+
+-Cluster 1: Students who are primarily in CTC Only and CTC + Work in the early 
+quarters, transitioning to Work Only by the middle of the observation window and 
+staying there through the end. Likely certificate or associate's degree 
+completers who move into stable employment.
+
+-Cluster 2: Students who start with a mix of CTC and work states in the early 
+quarters but transition relatively quickly into Work Only, where they remain for 
+most of the observation window. Likely short-term CTC enrollees who enter the 
+workforce early.
+
+-Cluster 3: Students who are predominantly in 4-Year Only in the early quarters, 
+tapering off around Quarter 9 to 13 and transitioning into Neither and some Work 
+Only. Likely 4-year enrollees who stop out without completing.
+
+-Cluster 4: Students with a brief period of CTC enrollment in the very early 
+quarters followed by a long stretch of Neither. Likely short-term CTC enrollees 
+who do not connect to the labor market.
+
+-Cluster 5: Students who are almost entirely in Work Only across all 28 quarters 
+with very little variation. Likely students who went directly into the workforce 
+after high school and stayed employed throughout.
+
+-Cluster 6: Students with 4-Year Only and 4-Year + Work states in the early 
+quarters, transitioning into Work Only around Quarter 13 to 17. Likely  
+bachelor's degree completers who move into employment after graduation.
+
+-Cluster 7: Students with a longer stretch of 4-Year Only and 4-Year + Work 
+states extending further into the observation window before transitioning to 
+Work Only. Likely extended 4-year enrollees or transfer students completing 
+bachelor's degrees on a longer timeline.
+
+-Cluster 8: Students with a mix of 4-Year and CTC states in the early quarters, 
+with some work, transitioning to Work Only over time. Likely transfer pathway 
+students moving between institution types.
+
+-Cluster 9: Students who spend most of the observation window in Neither, with 
+very little enrollment or employment. Likely students who are persistently 
+disconnected from both school and work.
+
+-Cluster 10: Students who are almost entirely in Work Only from the very first 
+quarter, with minimal enrollment. Likely students who went directly into the 
+workforce after high school without any postsecondary enrollment.
+
+-Cluster 11: Students with CTC + Work and CTC Only states in the early quarters 
+transitioning to Work Only relatively quickly. Likely short-term CTC enrollees 
+with concurrent employment who complete a credential and move into the workforce.
+
+-Cluster 12: Students with a longer period of CTC and 4-Year enrollment states, 
+including concurrent work, before transitioning to Work Only. Likely transfer 
+students or extended CTC enrollees who eventually complete and enter the 
+workforce.
+
+```{r cluster-state-dist, fig.height=9}
+# seqdplot with group = cluster plots one state distribution panel per cluster
+seqdplot(
+  seqdata,
+  group      = paste0("Cluster ", cluster_k12),
+  title      = "State Distribution by Cluster",
+  withlegend = "right",
+  border     = NA,
+  ylab       = "Proportion"
+)
+```
+
+## 5.2 Index plots by cluster
+The plots below also show sequences by cluster, this time with each individual
+student's sequence plotted.
+```{r cluster-index, fig.height=9}
+# Sequence index plots by cluster — shows individual sequences within each cluster
+seqiplot(
+  seqdata,
+  group      = paste0("Cluster ", cluster_k12),
+  title      = "Sequence Index Plots by Cluster",
+  sortv      = "from.start",
+  withlegend = "right",
+  border     = NA,
+  idxs       = 0
+)
+```
+
+---
+
+# 6 Labeling clusters as **PATHWAYS**
+
+Looking at the state distribution and index plots, we can assign descriptive 
+labels to each cluster/pathway. This is a judgment call and the labels should be:
+
+- **Accurate:** reflecting the dominant sequence pattern
+- **Concise:** usable in a table or figure
+- **Meaningful to a policy audience:** avoid jargon
+
+
+You may choose a different cluster solution or choose to highlight different
+aspects of each cluster, so your pathway names may be different.
+
+# 6.1 Assign Pathway Labels
+```{r label-pathways}
+# You can edit the code below with a different set of descriptive pathway labels 
+
+pathway_labels <- c(
+  "1"  = "Pathway 1: CTC to Workforce",
+  "2"  = "Pathway 2: Brief CTC, Early Workforce Entry",
+  "3"  = "Pathway 3: 4-Year Enrollment, No Completion",
+  "4"  = "Pathway 4: Brief CTC, Limited Workforce Connection",
+  "5"  = "Pathway 5: Direct and Sustained Workforce Entry",
+  "6"  = "Pathway 6: 4-Year Completion, Workforce Entry",
+  "7"  = "Pathway 7: Extended 4-Year, Workforce Entry",
+  "8"  = "Pathway 8: Mixed Enrollment, Workforce Entry",
+  "9"  = "Pathway 9: Limited Enrollment and Employment",
+  "10" = "Pathway 10: Direct Workforce Entry",
+  "11" = "Pathway 11: CTC with Work, Workforce Entry",
+  "12" = "Pathway 12: Extended Enrollment, Workforce Entry"
+)
+# Apply labels to the data
+combined_wide <- combined_wide %>%
+  mutate(pathway_labels = pathway_labels[as.character(cluster)]) %>% 
+  mutate(pathway = cluster)
+```
+
+
+## 6.2 Merge pathway labels onto the analysis flat file
+
+```{r merge-pathways}
+# Add pathway membership to the analysis flat file
+analysis_with_pathways <- analysis_flat %>%
+  left_join(
+    combined_wide %>% select(student_id, pathway, pathway_labels),
+    by = "student_id"
+  )
+```
+
+## 6.3 Pathway size summary
+
+```{r pathway-size}
+analysis_with_pathways %>%
+  count(pathway, pathway_labels) %>%
+  mutate(pct = percent(n / sum(n), accuracy = 0.1)) %>%
+  arrange(pathway) %>%
+  kable(col.names = c("Pathway #", "Label", "N", "% of cohort"),
+        caption   = "Pathway sizes") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+---
+
+# 7. Characterizing pathways by student characteristics and outcomes
+Once students have been assigned to pathway groups, the next step is to examine 
+who follows each pathway and what outcomes they achieve. This section explores 
+how pathway membership varies by student demographic and academic 
+characteristics and how labor market outcomes differ across pathway groups. 
+These analyses help answer two core research questions: are certain groups of 
+students more likely to follow particular pathways, and are certain pathways 
+associated with better labor market outcomes? Together, these analyses form the 
+substantive heart of the pathway research and are the basis for the policy 
+conclusions that can be drawn from this work.
+
+## 7.1 Labor market outcomes by pathway
+This table summarizes labor market outcomes by pathway group, showing the number
+of students in each pathway, the share who were ever employed during the 
+observation window, the share who were stably employed in the final year, and 
+median annual wages among stably employed students. 
+
+**Example Interpretation (Remember Data Are Synthetic)**
+Pathways involving 4-year enrollment (Pathways 3, 6, and 7) tend to show higher 
+median wages among stably employed students, consistent with the earnings 
+premium typically associated with bachelor's degree attainment. Pathways with 
+limited enrollment and employment connections (Pathways 4 and 9) show lower 
+rates of stable employment, reflecting the challenges faced by students who do 
+not maintain strong connections to either school or the workforce.
+
+**Note:** These figures are based on fully synthetic data generated for teaching 
+and methods demonstration purposes only. The outcome values, including 
+employment rates, stable employment rates, and wage figures, are illustrative 
+and do not necessarily reflect real labor market conditions in Washington State 
+or any other state. Users should expect their results to look meaningfully 
+different when working with real administrative data.
+
+```{r outcomes-by-pathway}
+analysis_with_pathways %>%
+  group_by(pathway, pathway_labels) %>%
+  summarise(
+    N                 = n(),
+    pct_ever_emp      = mean(ever_employed,   na.rm = TRUE),
+    pct_stably_emp    = mean(stably_employed, na.rm = TRUE),
+    median_wages      = median(annual_wages_2023[stably_employed == 1],
+                               na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(pathway) %>%
+  mutate(
+    `Ever employed`   = percent(pct_ever_emp,   accuracy = 0.1),
+    `Stably employed` = percent(pct_stably_emp, accuracy = 0.1),
+    `Median wages`    = dollar(median_wages)
+  ) %>%
+  select(pathway, pathway_labels, N, `Ever employed`, `Stably employed`,
+         `Median wages`) %>%
+  kable(col.names = c("pathway #", "Label", "N", "Ever employed",
+                       "Stably employed", "Median wages (stably emp.)"),
+        caption   = "Labor market outcomes by pathway") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = TRUE)
+```
+
+## 7.2 Wage distributions by pathway (dot plot)
+This chart shows the distribution of annual earnings among stably employed 
+students by pathway group, sorted from highest to lowest median wages. The dot 
+represents the median and the bar spans the 25th to 75th percentile, giving a 
+sense of both the typical earnings level and the spread within each pathway.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+Pathways involving 4-year enrollment show the highest median wages, with Pathway 
+3 (4-Year Enrollment, No Completion) and Pathway 6 (4-Year Completion, Workforce 
+Entry) both showing medians above $70,000. Notably, Pathway 3 students who did 
+not complete a degree still show relatively high earnings, which may reflect the 
+labor market value of some college coursework or the characteristics of students 
+who enrolled in 4-year institutions in the first place.
+
+CTC and workforce-focused pathways cluster in the $49,000 to $61,000 range, with 
+relatively similar median wages across most groups. Pathway 7 (Extended 4-Year, 
+Workforce Entry) stands out as an exception, showing the lowest median wages 
+despite involving 4-year enrollment, which may reflect lower credential 
+completion rates in that group.
+
+The overlapping interquartile ranges across most pathways are a reminder that 
+there is substantial variation within each group, and that pathway membership 
+alone does not determine individual outcomes.
+
+**Note:** These figures are based on synthetic data and do not reflect real 
+labor market conditions.
+
+```{r earnings-dotplot, fig.height=6}
+wages_summary <- analysis_with_pathways %>%
+  filter(stably_employed == 1) %>%
+  group_by(pathway, pathway_labels) %>%
+  summarise(
+    p25    = quantile(annual_wages_2023, 0.25, na.rm = TRUE),
+    median = median(annual_wages_2023, na.rm = TRUE),
+    p75    = quantile(annual_wages_2023, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(pathway_labels = fct_reorder(pathway_labels, median))
+
+ggplot(wages_summary, aes(y = pathway_labels)) +
+  geom_segment(aes(x = p25, xend = p75, yend = pathway_labels),
+               color = "#AACCEE", linewidth = 4, alpha = 0.7) +
+  geom_point(aes(x = median), size = 4, color = "#2E86AB") +
+  scale_x_continuous(labels = dollar_format(scale = 1/1000, suffix = "K"),
+                     limits = c(0, NA)) +
+  labs(
+    title    = "Annual Earnings Distribution by pathway",
+    subtitle = "Among stably employed students. Bar = 25th-75th percentile; dot = median",
+    x        = "Annual wages",
+    y        = NULL
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+## 7.3 Percent FRPL by Pathway
+This chart shows the share of students in each pathway who received free or 
+reduced price lunch (FRPL) in high school, which can be an indicator of economic 
+disadvantage. 
+
+**Example Interpretation (Remember Data Are Synthetic)**
+FRPL rates vary meaningfully across pathways, ranging from a low 
+of 31.3% in Pathway 3 (4-Year Enrollment, No Completion) to a high of 49.1% in 
+Pathway 5 (Direct and Sustained Workforce Entry). 
+
+Pathways with lower FRPL rates tend to be those involving 4-year enrollment, 
+particularly Pathways 3 and 6, suggesting that economically advantaged students 
+are more likely to pursue and persist in 4-year college pathways. Conversely, 
+pathways with higher FRPL rates tend to be those with limited postsecondary 
+enrollment or direct workforce entry, such as Pathways 5, 4, and 9, which could be
+reflecting patterns of economic barriers to postsecondary access.
+
+Pathway 9 (Limited Enrollment and Employment) stands out with the highest FRPL 
+rate at 45.8% while also showing the lowest stable employment rate in the 
+outcomes table, suggesting that economically disadvantaged students are 
+disproportionately represented in the pathway with the most challenging labor 
+market outcomes.
+
+**Note:** These figures are based on synthetic data and do not necessarily 
+reflect real patterns in Washington State or any other state.
+
+```{r frpl-by-pathway, fig.height=5}
+# FRPL rate by pathway
+analysis_with_pathways %>%
+  group_by(pathway, pathway_labels) %>%
+  summarise(frpl_rate = mean(frpl.x, na.rm = TRUE), .groups = "drop") %>%
+  mutate(pathway_label = fct_reorder(pathway_labels, frpl_rate)) %>%
+  ggplot(aes(x = frpl_rate, y = pathway_labels)) +
+  geom_col(fill = "#E84855", alpha = 0.80) +
+  geom_text(aes(label = percent(frpl_rate, accuracy = 0.1)),
+            hjust = -0.1, size = 3.5) +
+  scale_x_continuous(labels = percent_format(), limits = c(0, 0.85)) +
+  labs(
+    title = "FRPL Rate by pathway",
+    x     = "% of pathway receiving free/reduced price lunch",
+    y     = NULL
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+# 7.4. Examining differences in pathway participation
+
+This second graph below provides an alternative approach to visualizing 
+differences in pathway participation by FRPL status. This chart shows pathway 
+participation rates separately for FRPL and non-FRPL students, where each bar 
+represents the share of that group following a given pathway. This framing 
+highlights differences in how the two groups are distributed across pathways 
+rather than just the composition of each pathway.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+FRPL students show higher participation in workforce-focused pathways with 
+limited postsecondary engagement, particularly Pathway 5 (Direct and Sustained 
+Workforce Entry, 24.0% vs. 18.9%), Pathway 10 (Direct Workforce Entry, 12.5% vs. 
+10.8%), and Pathway 4 (Brief CTC, Limited Workforce Connection, 10.6% vs. 9.3%). 
+Non-FRPL students show higher participation in pathways involving sustained 
+postsecondary enrollment, particularly Pathway 6 (4-Year Completion, Workforce 
+Entry, 9.0% vs. 6.7%) and Pathway 3 (4-Year Enrollment, No Completion, 8.7% vs. 
+5.2%). Differences across most CTC pathways are smaller.
+
+**Note:** These figures are based on synthetic data and do not necessarily 
+reflect real patterns in Washington State or any other state.
+
+```{r pathway-by-frpl, fig.height=8, fig.width=12}
+# Identify "high-earnings" pathways as those with median wages above the
+# overall median. In a real analysis, you would use labeled pathways here.
+overall_median_wage <- median(
+  analysis_with_pathways$annual_wages_2023[
+    analysis_with_pathways$stably_employed == 1
+  ], na.rm = TRUE
+)
+
+analysis_with_pathways %>%
+  group_by(frpl = factor(frpl.x, levels = c(0, 1),
+                          labels = c("Non-FRPL", "FRPL")),
+           pathway_labels) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(frpl) %>%
+  mutate(pct = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(pathway_label = fct_reorder(pathway_labels, pct)) %>%
+  ggplot(aes(x = pct, y = pathway_labels, fill = frpl)) +
+  geom_col(position = "dodge", alpha = 0.85) +
+  geom_text(aes(label = percent(pct, accuracy = 0.1)),
+            hjust = -0.1, size = 3.5, position = position_dodge(width = 0.9)) +
+  scale_x_continuous(labels = percent_format()) +
+  scale_fill_manual(values = c("Non-FRPL" = "#2E86AB", "FRPL" = "#E84855")) +
+  labs(
+    title = "Pathway Participation by FRPL Status",
+    x     = "Share of group in this pathway",
+    y     = NULL,
+    fill  = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "top")
+```
+
+
+
+## 7.5 HS GPA distributions by pathway
+
+High school GPA is a strong predictor of postsecondary pathway. This ridge plot 
+shows the distribution of high school GPA for students in each pathway group, 
+sorted from highest to lowest median GPA. Each ridge represents the full 
+distribution of GPAs within a pathway, making it possible to see not just the 
+typical GPA but also the spread and shape of the distribution.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+Pathways involving 4-year college enrollment are concentrated at the top of the 
+chart, with Pathway 6 (4-Year Completion, Workforce Entry) and Pathway 3 (4-Year 
+Enrollment, No Completion) showing the highest GPA distributions, peaking around 
+3.5. CTC pathways cluster in the middle, with distributions centered around 2.5 
+to 3.0. Pathways with limited or no postsecondary enrollment, particularly 
+Pathway 5 (Direct and Sustained Workforce Entry) and Pathway 11 (CTC with Work, 
+Workforce Entry), show the lowest and widest GPA distributions, with more 
+students in the 1.5 to 2.5 range.
+
+The overlap between pathway distributions is worth noting. There are students 
+with high GPAs in every pathway, including workforce-only pathways, and 
+students with lower GPAs in the 4-year pathways. This suggests that while prior 
+academic preparation is strongly associated with pathway participation, it does 
+not fully determine it, and that factors beyond GPA also play important roles in
+shaping which pathway a student follows.
+
+**Note:** These figures are based on synthetic data and do not necessarily 
+reflect real patterns in Washington State or any other state.
+```{r gpa-ridgeplot, fig.height=7}
+hs_records <- read_csv(file.path(data_dir, "hs_records.csv"))
+
+analysis_with_pathways %>%
+  left_join(hs_records %>% select(student_id, hs_gpa), by = "student_id") %>%
+  filter(is.na(hs_gpa.x)==0) %>%
+  mutate(pathway_labels = fct_reorder(pathway_labels, hs_gpa.x, median)) %>%
+  ggplot(aes(x = hs_gpa.x, y = pathway_labels, fill = after_stat(x))) +
+  geom_density_ridges_gradient(scale = 1.5, rel_min_height = 0.01) +
+  scale_fill_gradient(low = "#FFE0B2", high = "#1B6CA8") +
+  labs(
+    title = "High School GPA Distribution by pathway",
+    x     = "High school GPA",
+    y     = NULL,
+    fill  = "GPA"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+```
+
+
+---
+
+# 8. Saving final results
+This final step saves the analysis dataset with pathway membership appended as a 
+new column. The resulting file, final_results_with_pathways.csv, contains one 
+row per student and includes all demographic characteristics, high school 
+records, credential attainment, labor market outcomes, and each student's 
+assigned pathway group. This file can be used for any subsequent analyses 
+outside of this module, such as regression models, subgroup comparisons, or data 
+visualizations, without needing to re-run the clustering steps.
+```{r save-results}
+# Save the final pathway membership merged with the analysis flat file
+final_results <- analysis_with_pathways
+
+write_csv(final_results, file.path(data_dir, "final_results_with_pathways.csv"))
+
+cat("Saved final_results_with_pathways.csv to", data_dir, "\n")
+cat("Rows:", nrow(final_results), "\n")
+cat("Columns:", ncol(final_results), "\n")
+```
+
+---
+
+# 9 Summary and key takeaways
+
+## What we did
+
+This three-module series demonstrated a complete sequence + cluster analysis 
+workflow applied to synthetic state longitudinal data:
+
+1. **Module 1:** Loaded and explored the raw longitudinal data tables; 
+   produced descriptive statistics on demographics, enrollment, credentials, 
+   and labor market outcomes.
+
+2. **Module 2:** Defined sequences using TraMineR; visualized trajectory 
+   patterns; computed Optimal Matching pairwise distances.
+
+3. **Module 3:** Applied Ward hierarchical clustering to the distance matrix; 
+   selected k using quality criteria; labeled pathways; validated against known 
+   archetypes; characterized pathways by demographics and outcomes.
+
+## Reminder of Key methodological decisions
+
+Every step in this workflow involves choices that affect results. Here are some 
+of the most consequential:
+
+- State definition: We used 6 combined enrollment and employment states for the 
+module code, though the larger Sequences to Success in WA State project ran 
+several version of the states, including combined enrollment and employment. We
+ultimately landed on a set of states that embedded credential attainment and 
+prioritized enrollment over employment, since this made the most sense for our 
+team's research goals. Other alternatives include using enrollment status only, 
+or creating finer-grained employment states that distinguish part-time from 
+full-time work or earnings levels.
+
+- Distance method: We used Optimal Matching (OM) with TRATE substitution costs, 
+which weights substitutions by the observed frequency of transitions between 
+states in the data. Alternatives include DHD, LCS, and OMslen, each of which 
+emphasizes different aspects of sequence similarity (see Section 6.3 for a 
+fuller discussion).
+
+- Indel cost: We set the indel cost to 1.5, which penalizes insertions and 
+deletions more than the default and tends to produce distances that are more 
+sensitive to the timing of transitions. Alternatives of 1.0 or 2.0 are worth 
+testing as a sensitivity check to confirm that your substantive conclusions do 
+not change meaningfully with different cost settings.
+
+- Clustering algorithm: We used Ward linkage hierarchical clustering, which 
+tends to produce compact, evenly sized clusters and is the most common approach 
+for sequence analysis with OM distances. Alternatives include complete linkage, 
+which tends to produce unequal cluster sizes, and k-medoids, which can be more 
+robust but is slower on large datasets.
+
+- Number of clusters: We chose 12 clusters based on a combination of cluster 
+quality statistics and substantive knowledge of the pathways we expected to find. 
+There is no single correct answer, and the choice should be guided by both 
+statistical fit and interpretability for your research audience.
+
+When reporting results, be transparent about these choices and, where possible, 
+show that your conclusions are robust to alternatives.
+
+
+**You have now completed the full sequence and cluster analysis workflow.** 
+The following file has been saved to your longitudinal_toy_data/ folder:
+
+- final_results_with_clusters.csv — the complete analysis dataset with pathway 
+membership appended, ready for any subsequent analyses such as regression models, 
+subgroup comparisons, or data visualizations.
+
+This is the final module in the series. If you would like to adapt this workflow 
+to your own state longitudinal data, return to 00_building_your_analysis_file.Rmd 
+for guidance on transforming raw enrollment and wage records into the 
+sequence-ready format used across these modules.
+
+---
+
+# Session information
+
+The code in this module was developed and tested using the package versions 
+listed below. If you encounter unexpected errors, checking your package 
+versions against these is a good first troubleshooting step. You can update 
+packages by running `update.packages()` in your RStudio console.
+
+```{r session-info}
+sessionInfo()
+```
+
+**Development Session Info**
+R version 4.5.2 (2025-10-31)
+Platform: x86_64-pc-linux-gnu
+Running under: Red Hat Enterprise Linux 9.8 (Plow)
+
+Matrix products: default
+BLAS/LAPACK: FlexiBLAS OPENBLAS-OPENMP;  LAPACK version 3.9.0
+
+locale:
+LC_CTYPE=C.UTF-8       LC_NUMERIC=C           LC_TIME=C.UTF-8        LC_COLLATE=C.UTF-8     LC_MONETARY=C.UTF-8   
+LC_MESSAGES=C.UTF-8    LC_PAPER=C.UTF-8       LC_NAME=C              LC_ADDRESS=C           LC_TELEPHONE=C        
+LC_MEASUREMENT=C.UTF-8 LC_IDENTIFICATION=C   
+
+time zone: America/New_York
+tzcode source: system (glibc)
+
+attached base packages:
+stats     graphics  grDevices utils     datasets  methods   base     
+
+other attached packages:
+ggridges_0.5.7        WeightedCluster_1.8-1 cluster_2.1.8.1       RColorBrewer_1.1-3    TraMineR_2.2-12      
+kableExtra_1.4.0      knitr_1.50            scales_1.4.0          lubridate_1.9.4       forcats_1.0.1        
+stringr_1.6.0         dplyr_1.1.4           purrr_1.2.0           readr_2.1.6           tidyr_1.3.1          
+tibble_3.3.0          ggplot2_4.0.1         tidyverse_2.0.0      
+
+loaded via a namespace (and not attached):
+tidyselect_1.2.1    viridisLite_0.4.2   farver_2.1.2        S7_0.2.1            fastmap_1.2.0       digest_0.6.38      
+timechange_0.3.0    lifecycle_1.0.4     magrittr_2.0.4      compiler_4.5.2      rlang_1.1.6         sass_0.4.10        
+tools_4.5.2         yaml_2.3.10         labeling_0.4.3      bit_4.6.0           xml2_1.4.1          rsconnect_1.6.1    
+withr_3.0.2         nnet_7.3-20         grid_4.5.2          colorspace_2.1-2    future_1.67.0       progressr_0.18.0   
+fastcluster_1.3.0   globals_0.18.0      iterators_1.0.14    MASS_7.3-65         cli_3.6.5           rmarkdown_2.30     
+vegan_2.7-2         crayon_1.5.3        generics_0.1.4      rstudioapi_0.17.1   future.apply_1.20.0 tzdb_0.5.0         
+cachem_1.1.0        splines_4.5.2       parallel_4.5.2      vctrs_0.6.5         vegclust_2.0.3      boot_1.3-32        
+Matrix_1.7-4        jsonlite_2.0.0      hms_1.1.4           bit64_4.6.0-1       listenv_0.10.0      systemfonts_1.3.1  
+foreach_1.5.2       jquerylib_0.1.4     glue_1.8.0          parallelly_1.45.1   codetools_0.2-20    stringi_1.8.7      
+gtable_0.3.6        doFuture_1.1.2      pillar_1.11.1       htmltools_0.5.8.1   R6_2.6.1            textshaping_1.0.4  
+vroom_1.6.6         evaluate_1.0.5      lattice_0.22-7      bslib_0.9.0         svglite_2.2.2       nlme_3.1-168       
+permute_0.9-8       mgcv_1.9-3          xfun_0.54           pkgconfig_2.0.3    
+
+---
+
+*Synthetic data generated for teaching purposes.*

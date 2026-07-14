@@ -1,0 +1,815 @@
+---
+title: "School-to-Work Pathways: Sequence Analysis"
+subtitle: "Module 2 of 3 — Using Synthetic Longitudinal Data"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width  = 10,
+  fig.height = 6
+)
+```
+
+---
+
+# Overview
+
+This is the second of three modules on studying school-to-work pathways in 
+longitudinal administrative data.
+
+This module introduces **sequence analysis**,  which is a method for describing and 
+comparing individual trajectories over time. Rather than summarizing outcomes 
+at a single point (e.g., "was this person employed at year 6?"), sequence 
+analysis treats the entire pathway as the unit of analysis.
+
+## What is a sequence?
+
+A **sequence** is an ordered string of states. In this dataset, each student 
+has a sequence of 28 quarters, and each quarter is coded as one of several states:
+
+| State        | Meaning                                    |
+|--------------|--------------------------------------------|
+| `4YR_Work`   | Enrolled at 4-year college AND employed    |
+| `4YR_NoWork` | Enrolled at 4-year college, not employed   |
+| `CTC_Work`   | Enrolled at community/technical college AND employed |
+| `CTC_NoWork` | Enrolled at community/technical college, not employed |
+| `Work_Only`  | Not enrolled, employed                     |
+| `Neither`    | Not enrolled, not employed                 |
+
+For example, a student who went directly to a 4-year college and worked part-time 
+might have a sequence like:
+
+`4YR_Work → 4YR_Work → 4YR_Work → 4YR_Work → 4YR_Work → 4YR_NoWork → 4YR_NoWork → 4YR_NoWork → Work_Only → Work_Only → ...`
+
+Sequence analysis lets us visualize these patterns, measure how similar two 
+sequences are, and eventually cluster students with similar trajectories.
+
+## Key package: TraMineR
+
+We use the **TraMineR** package, developed at the University of Geneva. It 
+provides tools for defining, visualizing, and analyzing sequences.
+
+- Documentation: https://traminer.unige.ch
+- Key paper: Gabadinho et al. (2011), *Analyzing and Visualizing State 
+  Sequences in R with TraMineR*, Journal of Statistical Software
+  
+  
+**Output files**
+This module produces the following output files, which are saved to the 
+longitudinal_toy_data/ folder and are required for Module 3:
+
+- dist_om.rds — the pairwise Optimal Matching distance matrix used for clustering
+- seqdata.rds — the TraMineR sequence object used for visualization
+
+
+**A note on package versions:** The code in this module was developed and tested 
+using specific versions of R and its packages. If you encounter unexpected 
+errors or differences in output, it may be due to package version differences. 
+See the [Session information] section at the end of this module for the full 
+list of package versions used in development. You can check your own package 
+versions by running sessionInfo() in your RStudio console, and update packages 
+by running update.packages().
+
+
+
+---
+
+# 1. Setup
+
+## 1.1 Load packages
+
+```{r load-packages}
+library(tidyverse)
+library(TraMineR)    # core sequence analysis package
+library(scales)
+library(knitr)
+library(kableExtra)
+library(RColorBrewer)
+
+# Install TraMineR if needed:
+# install.packages("TraMineR")
+```
+
+## 1.2 Load data
+
+```{r load-data}
+data_dir <- "/data/share/cdi/Sequences to Success in WA/Quantitative/GitHub Repo/longitudinal_toy_data"
+
+# The combined_seq_wide table has one row per student and one column per quarter.
+# Each cell contains the combined enrollment + employment state for that quarter.
+combined_wide <- read_csv(file.path(data_dir, "combined_seq_wide.csv"))
+
+# We also load the flat file for demographic comparisons later
+analysis_flat <- read_csv(file.path(data_dir, "analysis_flat.csv"))
+
+# And students for demographic variables
+students <- read_csv(file.path(data_dir, "students.csv"))
+```
+
+## 1.3 Inspect the wide sequence data
+
+```{r inspect-wide}
+# The sequence columns are named cstate_1 through cstate_28
+# Each row is one student; each column is one quarter
+glimpse(combined_wide)
+
+# Preview the first few rows and columns
+combined_wide %>%
+  select(student_id, cstate_1:cstate_6) %>%
+  head(10)
+```
+
+---
+
+# 2. Defining sequences in TraMineR
+
+## 2.1 Specify the alphabet and labels
+
+Before creating sequence objects, we define the **alphabet**, or the complete 
+set of possible states. TraMineR uses this to validate the data and produce 
+consistent visualizations.
+
+```{r define-alphabet}
+# The alphabet: all possible states a student can be in at any given quarter
+STATES <- c(
+  "4YR_Work",   # 4-year + employed
+  "4YR_NoWork", # 4-year, not employed
+  "CTC_Work",   # CTC + employed
+  "CTC_NoWork", # CTC, not employed
+  "Work_Only",  # workforce only
+  "Neither"     # neither enrolled nor employed
+)
+
+# Human-readable labels for plots (same order as STATES)
+LABELS <- c(
+  "4-Year + Work",
+  "4-Year Only",
+  "CTC + Work",
+  "CTC Only",
+  "Work Only",
+  "Neither"
+)
+
+# Color palette — one color per state
+# Using a manually chosen palette for visual clarity
+STATE_COLORS <- c(
+  "4YR_Work"   = "#1B6CA8",  # deep blue
+  "4YR_NoWork" = "#6EB5E0",  # light blue
+  "CTC_Work"   = "#7B2D8B",  # deep purple
+  "CTC_NoWork" = "#C490D1",  # light purple
+  "Work_Only"  = "#2CA25F",  # green
+  "Neither"    = "#CCCCCC"   # gray
+)
+```
+
+## 2.2 Create the sequence object
+
+The `seqdef()` function converts the wide data frame into a TraMineR 
+**sequence object** which is a special data structure that stores sequences alongside 
+metadata like the alphabet, labels, and colors.
+
+```{r create-seqobj}
+# Extract just the sequence columns (cstate_1 through cstate_28)
+seq_cols <- grep("^cstate_", names(combined_wide), value = TRUE)
+
+# Create the TraMineR sequence object
+# - The first argument is the data frame containing sequence columns
+# - states = the alphabet (all possible values)
+# - labels = human-readable names for each state
+# - cnames = names for the time points (here: quarter 1 through quarter 28)
+# - xtstep = how often to label the x-axis in plots
+seqdata <- seqdef(
+  data     = combined_wide[, seq_cols],
+  alphabet = STATES,
+  states   = STATES,
+  labels   = LABELS,
+  cnames   = paste0("Quarter ", 1:28),
+  cpal     = unname(STATE_COLORS[STATES]),
+  xtstep   = 4,
+  missing.color = "#F5C842"
+)
+
+# Inspect the sequence object
+options(max.print = 20) # limit rows that will be printed
+print(seqdata,  format = "SPS")  # SPS = Successive Periods of States format
+```
+
+```{r seqobj-summary}
+# seqdef produces a sequence object — check its basic properties
+cat("Number of sequences:", nrow(seqdata), "\n")
+cat("Sequence length:    ", ncol(seqdata), "quarters\n")
+cat("Alphabet:           ", paste(alphabet(seqdata), collapse = ", "), "\n")
+```
+
+---
+
+# 3. Visualizing sequences
+
+## 3.1 State distribution plot (tempogram)
+
+The **state distribution plot** shows the proportion of students in each state 
+at each time point. It is the most common way to get an overall sense of how 
+the cohort moves through states over time. Each vertical slice represents one 
+quarter, and the colored bands show what proportion of the cohort was in each 
+state at that point in time. The height of each band corresponds to the share 
+of students in that state, and all bands together add up to 100% in every 
+quarter.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+In the earliest quarters, a large share of 
+students are enrolled in either a 4-year college (light blue) or a CTC (pink and
+purple), with enrollment peaking around Quarter 5. Notably, a meaningful portion
+of enrolled students are also working at the same time (the darker blue and 
+purple bands), reflecting the reality that many students balance school and 
+employment simultaneously.
+
+As the cohort moves through time, enrollment tapers off as students complete 
+their programs or stop out. By the later quarters, the chart is dominated by two
+states: Work Only (green), representing students who have finished school and 
+entered the workforce, and Neither (gray), representing students who are neither
+enrolled nor employed at that point.
+
+The growth of the Work Only band over time is an encouraging pattern as it 
+suggests that as students complete their pathways, a growing share transition 
+into stable employment. The persistence of the Neither band in later quarters, 
+however, points to a group of students who may need additional support 
+connecting to the labor market.
+
+```{r state-dist-plot, fig.height=5}
+# seqdplot() = state distribution plot
+# withlegend = "right" places the legend to the right of the plot
+# border = NA removes cell borders for a cleaner look
+seqdplot(
+  seqdata,
+  title      = "State Distribution by Quarter (Full Cohort)",
+  withlegend = "right",
+  border     = NA,
+  ylab       = "Proportion of students",
+  xlab       = "Quarter"
+)
+
+
+```
+
+
+
+## 3.2 Sequence index plot
+
+The **sequence index plot** (also called an index plot or "carpet plot") shows 
+one row per student, with each row colored by state at each time point. Each 
+horizontal line represents one student, and the colors show which state that 
+student was in at each quarter across the full 28-quarter observation window. 
+Students are sorted by their starting state, so similar pathways tend to appear 
+grouped together. With 5,000 students this is dense, but sorting by sequence 
+pattern makes structure visible.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+Several distinct pathway patterns are visible. At the bottom of the chart, a 
+group of students (shown in dark and light blue) start in 4-year college 
+enrollment, many of whom transition into Work Only (green) after completing 
+their degrees. In the middle, a band of students follow CTC pathways (purple 
+shades) before also moving into the workforce. Toward the top, a large group of
+students show gray (Neither) or green (Work Only) from early on, reflecting 
+those who never enrolled in postsecondary education or who moved directly into
+the labor market.
+
+The increasing dominance of green (Work Only) in the later quarters is visible 
+across most pathway groups, reinforcing the pattern seen in the state 
+distribution plot. Over time, more and more students transition into employment 
+regardless of their starting pathway.
+
+The variation and complexity of the individual lines illustrates exactly why 
+sequence analysis is useful. Rather than summarizing outcomes at a single point 
+in time, it captures the full trajectory of each student, making it possible to 
+identify groups of students who followed meaningfully similar paths. That 
+grouping is what the cluster analysis in the next module will accomplish.
+
+
+```{r index-plot-full, fig.height=7}
+# seqiplot() = sequence index plot
+# sortv = "from.start" sorts sequences by their starting state,
+#         which groups similar trajectories together visually
+# idxs = 0 means "plot all sequences" (use a number like 500 for a sample)
+seqiplot(
+  seqdata,
+  title      = "Sequence Index Plot — All Students (sorted by start state)",
+  sortv      = "from.start",
+  withlegend = "right",
+  border     = NA,
+  ylab       = "Students",
+  xlab       = "Quarter",
+  idxs       = 0
+)
+```
+
+
+
+```{r index-plot-sample, fig.height=6}
+# With 5,000 students the full plot is dense.
+# A random sample of 100 is easier to read and still shows the main patterns.
+set.seed(25)
+sample_idx <- sample(nrow(seqdata), 100)
+
+seqiplot(
+  seqdata[sample_idx, ],
+  title      = "Sequence Index Plot — Random Sample of 100 Students",
+  sortv      = "from.start",
+  withlegend = "right",
+  border     = NA,
+  ylab       = "Students",
+  xlab       = "Quarter",
+  idxs       = 1:100
+)
+```
+
+## 3.3 Sequence frequency plot
+
+The **sequence frequency plot** shows only the most common distinct sequences, 
+ranked by frequency. This is useful for identifying dominant pathway patterns.
+
+```{r freq-plot, fig.height=6}
+# seqfplot() = sequence frequency plot
+# idxs = 1:20 shows the 20 most frequent sequences
+seqfplot(
+  seqdata,
+  title      = "20 Most Frequent Sequences",
+  idxs       = 1:20,
+  withlegend = "right",
+  border     = NA,
+  ylab       = "Cumulative frequency (%)",
+  xlab       = "Quarter"
+)
+```
+
+## 3.4 Mean time spent in each state
+
+The `seqmtplot()` function shows the average number of quarters each student 
+spends in each state. This is a simple but useful summary statistic.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+This bar chart shows the average number of quarters students spent in each state 
+across the full 28-quarter observation window. The two most time-consuming 
+states are Work Only (about 9 quarters on average) and Neither (about 8 
+quarters), reflecting the fact that most students spend the majority of the 
+observation period outside of enrollment. Enrollment states, both with and 
+without concurrent employment, account for a relatively smaller share of the 
+average student's trajectory, typically 3 to 4 quarters each for 4-year and CTC 
+pathways. This reinforces that while postsecondary enrollment is an important 
+part of the pathway, much of a student's time in the observation window is spent
+in the labor market or disconnected from both school and work.
+
+```{r mean-time-plot, fig.height=4.5}
+seqmtplot(
+  seqdata,
+  title      = "Mean Time Spent in Each State",
+  withlegend = "right",
+  ylab       = "Mean number of quarters"
+)
+```
+
+---
+
+# 4. Sequence statistics
+
+## 4.1 Transition rates
+
+**Transition rates** describe how likely students are to move from one state 
+to another between consecutive quarters. `seqtrate()` returns a matrix of 
+state-to-state transition probabilities. Each row represents a "from" state and 
+each column represents a "to" state. The values show the probability that a 
+student in a given state in one quarter will be in each possible state the 
+following quarter. High values on the diagonal indicate that students tend to 
+stay in the same state from one quarter to the next Values in each row sum to 1.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+Enrollment states are moderately persistent but show realistic movement. 
+Students enrolled at a 4-year college and working (4YR_Work) have a 58% chance 
+of staying in that same state the next quarter, but also have meaningful 
+probabilities of dropping to 4YR_NoWork (22%) or transitioning out of enrollment 
+entirely into Work Only (11%). Similarly, CTC_Work students have a 54% chance of 
+staying, with notable transitions to CTC_NoWork (21%) and Work Only (14%). This 
+suggests that students frequently shift between working and not working while 
+enrolled.
+
+Students not working while enrolled often stop out. 4YR_NoWork students have a 
+68% chance of staying in that state, but an 11% chance of stopping out to 
+Neither. This is higher than the stop-out rate for working students. A similar 
+pattern holds for CTC_NoWork students, who have a 15% chance of transitioning to 
+Neither. This suggests that working while enrolled may be associated with 
+greater persistence, though this is a pattern in the synthetic data and should 
+be interpreted cautiously.
+
+Work Only and Neither are fairly sticky. Students in Work Only stay there 75% of 
+the time, while students in Neither stay there 71% of the time. However, Neither 
+students do show a 24% transition into Work Only, reflecting students gradually 
+connecting to the labor market over time.
+
+```{r transition-rates}
+# seqtrate() computes the empirical transition rate matrix
+trate <- seqtrate(seqdata)
+
+# Round for readability and display as a table
+round(trate, 3) %>%
+  as.data.frame() %>%
+  rownames_to_column("From \\ To") %>%
+  kable(caption = "Transition rates between states (row = from, column = to)") %>%
+  kable_styling(bootstrap_options = c("striped", "condensed"),
+                font_size = 11, full_width = TRUE) %>%
+  column_spec(1, bold = TRUE)
+```
+
+
+
+## 4.2 Sequence entropy
+
+**Entropy** measures how unpredictable a sequence is. A sequence that stays in 
+one state has entropy = 0; a sequence that jumps randomly between all states 
+has high entropy. In pathway research, high entropy may indicate students with 
+complex or non-linear trajectories.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+The distribution has two notable features. First, there is a small cluster of 
+students at or near 0, representing students with very simple, uniform pathways
+who most likely spent nearly all 28 quarters in Neither or Work Only without 
+transitioning. Second, the bulk of the distribution is spread across entropy 
+values of roughly 0.35 to 0.90, with a peak around 0.40 and a second 
+concentration around 0.65 to 0.80. This spread reflects the genuine diversity of 
+pathways in the cohort with some students following relatively straightforward 
+trajectories while others move through multiple states over time.
+
+The bimodal shape, with one concentration around 0.40 and another around 0.65 to
+0.80, hints that there may be meaningful subgroups in the data with 
+systematically different levels of pathway complexity. This is exactly the kind 
+of variation that sequence and cluster analysis is designed to uncover. This
+pattern also suggests that the cluster analysis in the next module is likely to 
+identify distinct groups of students with meaningfully different trajectories.
+
+```{r entropy}
+# seqient() computes the entropy of each individual sequence
+entropy <- seqient(seqdata)
+
+# Plot distribution of entropy across students
+data.frame(entropy = as.numeric(entropy)) %>%
+  ggplot(aes(x = entropy)) +
+  geom_histogram(binwidth = 0.02, fill = "#2E86AB", color = "white", alpha = 0.85) +
+  labs(
+    title    = "Distribution of Sequence Entropy",
+    subtitle = "Higher values indicate more complex, variable pathways",
+    x        = "Sequence entropy",
+    y        = "Number of students"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+## 4.3 Number of transitions
+
+`seqtransn()` counts the number of state changes in each sequence. A student 
+who goes CTC → Work has 1 transition; a student who enrolls, leaves, and 
+re-enrolls has more.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+The distribution is roughly bell-shaped and centered around 7 to 9 transitions, 
+meaning the typical student changed states multiple times over the observation 
+period. This is consistent with the transition rate table, which showed that 
+most states have meaningful probabilities of moving to other states from quarter 
+to quarter.
+
+The small group of students with 0 or 1 transitions represents those with very 
+stable, uniform pathways. On the other end, a small number of students made 13 
+or more transitions, reflecting highly variable trajectories with frequent 
+movement between states.
+
+Overall, the relatively high number of transitions per student reinforces that 
+these pathways are genuinely complex and dynamic.
+
+```{r transitions}
+n_transitions <- seqtransn(seqdata)
+
+data.frame(n_trans = as.numeric(n_transitions)) %>%
+  ggplot(aes(x = n_trans)) +
+  geom_bar(fill = "#A23B72", alpha = 0.85) +
+  scale_x_continuous(breaks = 0:10) +
+  labs(
+    title = "Number of State Transitions per Student",
+    x     = "Number of transitions",
+    y     = "Number of students"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+---
+
+# 5. Subgroup comparisons
+
+One of the most useful things you can do with sequence analysis is compare 
+trajectory patterns across demographic subgroups. Here we compare state 
+distributions by FRPL status and by rural/urban.
+
+## 5.1 By FRPL status
+These two charts show state distribution plots side by side, comparing students 
+who received free or reduced price lunch (FRPL) in high school (a common 
+indicator of economic disadvantage) with those who did not. The charts follow 
+the same format as the full cohort state distribution plot above, with each 
+vertical slice showing the proportion of students in each state at a given 
+quarter.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+Several meaningful differences stand out between the two groups. Non-FRPL 
+students show substantially higher rates of 4-year college enrollment (light 
+blue and dark blue) in the early quarters, peaking around Quarter 5 before 
+tapering off as students complete their degrees. FRPL students, by contrast, 
+show lower 4-year enrollment throughout and a relatively higher share in CTC 
+pathways (purple shades), which may reflect differences in postsecondary access 
+and choice by income level.
+
+Both groups show a similar overall arc, with enrollment concentrated in the 
+early quarters and Work Only growing over time, but the transition happens 
+somewhat differently. Non-FRPL students show a more pronounced shift into Work 
+Only in the middle quarters, consistent with more students completing bachelor's 
+degrees on a "normative" timeline. FRPL students show a higher proportion in 
+Neither across most of the observation window, which may suggest greater 
+challenges connecting to both postsecondary education and the labor market.
+
+```{r subgroup-frpl, fig.height=5}
+# Merge FRPL indicator onto the sequence data index
+frpl_vec <- students$frpl[match(combined_wide$student_id, students$student_id)]
+frpl_label <- if_else(frpl_vec == 1, "FRPL", "Non-FRPL")
+
+# seqdplot with group argument produces side-by-side distribution plots
+seqdplot(
+  seqdata,
+  group      = frpl_label,
+  title      = "State Distribution by FRPL Status",
+  withlegend = "right",
+  border     = NA
+)
+```
+
+## 5.2 By rural/urban
+These two charts compare state distributions over time for students from 
+non-rural and rural areas. The format is the same as the previous subgroup 
+comparisons, with each vertical slice showing the proportion of students in each 
+state at a given quarter.
+
+**Example Interpretation (Remember Data Are Synthetic)**
+The differences between rural and non-rural students are notable, though 
+somewhat less pronounced than the FRPL differences above. Non-rural students 
+show higher rates of 4-year college enrollment (blue shades) in the early 
+quarters, with a clear peak around Quarter 5 before declining as students 
+complete their programs. Rural students show lower 4-year enrollment throughout 
+the observation window and a somewhat higher share in CTC pathways (purple 
+shades), consistent with patterns seen in research on rural postsecondary access 
+where geographic distance and economic factors often make community and 
+technical colleges a more accessible option.
+
+Both groups transition toward Work Only (green) over time, but rural students 
+show a persistently higher share in Neither across the observation window, 
+suggesting that connecting to the labor market may be more challenging for 
+students from rural areas. The lower overall enrollment rates for rural students 
+in the early quarters also point to a larger share going directly into the 
+workforce or neither working nor enrolling after high school graduation.
+
+As with the FRPL comparison, these differences illustrate how pathway patterns 
+can vary meaningfully across student subgroups, and how sequence analysis makes 
+those differences visible in a way that single-point outcome measures cannot.
+
+```{r subgroup-rural, fig.height=5}
+rural_vec   <- students$rural_flag[match(combined_wide$student_id, students$student_id)]
+rural_label <- if_else(rural_vec == 1, "Rural", "Non-Rural")
+
+seqdplot(
+  seqdata,
+  group      = rural_label,
+  title      = "State Distribution by Rural/Urban",
+  withlegend = "right",
+  border     = NA
+)
+```
+
+
+# 6. Computing pairwise distances (Optimal Matching)
+
+The core computational step in sequence analysis is calculating a **distance 
+matrix** — a measure of how different each pair of sequences is from each other.
+
+## 6.1 What is Optimal Matching?
+
+**Optimal Matching (OM)** is borrowed from bioinformatics (DNA sequence 
+alignment). It finds the minimum "cost" to transform one sequence into another 
+using insertions, deletions, and substitutions. Two sequences are "close" if 
+they require few operations to make them identical.
+
+Key parameters:
+
+- **Indel cost:** The cost of inserting or deleting a state. Higher indel 
+  costs penalize timing differences more.
+- **Substitution cost matrix:** The cost of swapping one state for another. 
+  We use `sm = "TRATE"` to derive substitution costs from empirical transition 
+  rates — states that rarely transition to each other get a high substitution 
+  cost.
+
+## 6.2 Compute the distance matrix
+
+```{r compute-distances}
+# This step can take a minute or two with 5,000 sequences.
+# The result is an N x N distance matrix (stored as a "dist" object).
+
+# sm = "TRATE" derives substitution costs from observed transition rates.
+#   This is the most common approach for social science sequence data.
+# indel = 1.5 is a standard starting value; you can experiment with this.
+# norm = "auto" normalizes distances by sequence length (important when
+#   sequences have different lengths due to missing data)
+
+cat("Computing pairwise distances using Optimal Matching...\n")
+
+dist_om <- seqdist(
+  seqdata,
+  method = "OM",
+  sm     = "TRATE",
+  indel  = 1.5,
+  norm   = "auto",
+  with.missing = TRUE
+)
+
+cat("Distance matrix dimensions:", dim(dist_om), "\n")
+cat("Range of distances:", round(range(dist_om), 3), "\n")
+```
+
+**Example Interpretation (Remember Data Are Synthetic)**
+This graph below shows the distribution of pairwise Optimal Matching (OM) 
+distances across all possible pairs of students in the cohort. Each value 
+represents how dissimilar two students' sequences are, with 0 meaning identical 
+pathways and higher values indicating greater dissimilarity. The distribution is 
+roughly bell-shaped and centered around 0.7 to 0.8, meaning most pairs of 
+students have moderately to highly dissimilar trajectories. The small cluster of 
+values near 0 represents pairs of students whose pathways are nearly identical, 
+likely students who both spent the full observation window in Neither or Work 
+Only. The overall spread of the distribution confirms that there is substantial 
+variation in pathways across the cohort, which is a good sign that the cluster 
+analysis will be able to identify meaningfully distinct groups.
+
+```{r distance-dist}
+# The distribution of pairwise distances tells you how spread out sequences are.
+# A bimodal distribution often suggests distinct pathway clusters.
+data.frame(dist = as.vector(dist_om[lower.tri(dist_om)])) %>%
+  ggplot(aes(x = dist)) +
+  geom_histogram(bins = 60, fill = "#2E86AB", color = "white", alpha = 0.85) +
+  labs(
+    title    = "Distribution of Pairwise Optimal Matching Distances",
+    subtitle = "Each value represents the dissimilarity between two student sequences",
+    x        = "OM distance",
+    y        = "Frequency"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+## 6.3 A note on alternative distance measures
+OM is the most widely used method, but TraMineR supports others. The right 
+choice depends on what aspect of the pathway you care most about. The table 
+below describes each method and provides examples of research questions where it 
+would be a good fit.
+
+* OM (Optimal Matching): Counts the minimum number of insertions, deletions, and
+substitutions needed to turn one sequence into another. This is the general 
+purpose method that works well when both the states visited and their timing 
+matter. A good fit for questions like: How do school-to-work pathways differ 
+between students who received FRPL and those who did not?
+
+*HAM (Hamming distance): Compares sequences position by position and counts 
+mismatches. Works best when sequences are the same length and timing is 
+important. It is also computationally faster than OM. A good fit for questions 
+like: Do students from rural areas differ from urban students in their 
+enrollment status in each quarter of the first two years after high school?
+
+*LCS (Longest Common Subsequence): Measures similarity based on shared states 
+appearing in the same order, regardless of when they occur. A good fit for 
+questions like: Do students who eventually transfer from a CTC to a 4-year 
+college share a common sequence of early pathway steps, even if the timing 
+varies?
+
+*DHD (Dynamic Hamming Distance): A time-sensitive version of Hamming that allows 
+for some flexibility in timing. A good fit for questions like: Are there groups 
+of students who follow similar enrollment patterns in the first year after high 
+school, even if some start a quarter earlier or later than others?
+
+*OMslen (OM with spell length weighting): Modifies OM to give more weight to 
+time spent in a state rather than just the transitions between states. A good 
+fit for questions like: Does the length of time a student spends enrolled at a 
+CTC before transferring predict their likelihood of completing a bachelor's 
+degree?
+
+For policy research on education and workforce pathways, OM with TRATE 
+substitution costs is a reasonable default. It is flexible, well-understood, and
+produces results that are interpretable for a broad audience. The other methods 
+are worth exploring if you have a specific hypothesis about whether timing, 
+duration, or sequence order is the most important dimension of the pathway you 
+are studying.
+
+---
+
+# 7. Saving the distance matrix
+
+The distance matrix is the main output of sequence analysis and the main input 
+to cluster analysis. We save it here so Module 3 can load it directly without 
+recomputing.
+
+```{r save-distances}
+# Save as an R data file (.rds) — this preserves the matrix class and attributes
+saveRDS(dist_om,  file = file.path(data_dir, "dist_om.rds"))
+saveRDS(seqdata,  file = file.path(data_dir, "seqdata.rds"))
+
+cat("Saved dist_om.rds and seqdata.rds to", data_dir, "\n")
+```
+
+---
+
+# 8. Summary
+
+In this module we:
+
+1. Defined sequences using TraMineR's `seqdef()` function
+2. Visualized the full cohort using state distribution plots, index plots, 
+   and frequency plots
+3. Computed sequence statistics including transition rates, entropy, and 
+   number of transitions
+4. Compared trajectory patterns across demographic subgroups
+5. Computed a pairwise Optimal Matching distance matrix
+
+**Module 3 — Cluster Analysis** will take the distance matrix computed here 
+and use hierarchical clustering to group students with similar trajectories 
+into pathway clusters. We will then label those clusters, validate them, and 
+examine how they vary by demographics and outcomes.
+
+**You have now completed the sequence analysis module.** 
+The following files have been saved to your longitudinal_toy_data/ folder and 
+will be loaded automatically at the start of Module 3:
+- dist_om.rds — the pairwise distance matrix computed in Section 6
+- seqdata.rds — the TraMineR sequence object used for visualization
+
+Open 03_cluster_analysis.Rmd to continue to the next step, where you will use 
+these files to group students with similar trajectories into pathway clusters.
+
+---
+
+# Session information
+
+The code in this module was developed and tested using the package versions 
+listed below. If you encounter unexpected errors, checking your package 
+versions against these is a good first troubleshooting step. You can update 
+packages by running `update.packages()` in your RStudio console.
+
+```{r session-info}
+sessionInfo()
+```
+
+
+**Development Session Info**
+R version 4.5.2 (2025-10-31)
+Platform: x86_64-pc-linux-gnu
+Running under: Red Hat Enterprise Linux 9.8 (Plow)
+
+Matrix products: default
+BLAS/LAPACK: FlexiBLAS OPENBLAS-OPENMP;  LAPACK version 3.9.0
+
+locale:
+LC_CTYPE=C.UTF-8       LC_NUMERIC=C           LC_TIME=C.UTF-8        LC_COLLATE=C.UTF-8     LC_MONETARY=C.UTF-8   
+LC_MESSAGES=C.UTF-8    LC_PAPER=C.UTF-8       LC_NAME=C              LC_ADDRESS=C           LC_TELEPHONE=C        
+LC_MEASUREMENT=C.UTF-8 LC_IDENTIFICATION=C   
+
+time zone: America/New_York
+tzcode source: system (glibc)
+
+attached base packages:
+stats     graphics  grDevices utils     datasets  methods   base     
+
+other attached packages:
+RColorBrewer_1.1-3 TraMineR_2.2-12    kableExtra_1.4.0   knitr_1.50         scales_1.4.0       lubridate_1.9.4   
+forcats_1.0.1      stringr_1.6.0      dplyr_1.1.4        purrr_1.2.0        readr_2.1.6        tidyr_1.3.1       
+tibble_3.3.0       ggplot2_4.0.1      tidyverse_2.0.0   
+
+loaded via a namespace (and not attached):
+gtable_0.3.6      xfun_0.54         bslib_0.9.0       lattice_0.22-7    tzdb_0.5.0        vctrs_0.6.5      
+tools_4.5.2       generics_0.1.4    parallel_4.5.2    cluster_2.1.8.1   pkgconfig_2.0.3   Matrix_1.7-4     
+S7_0.2.1          lifecycle_1.0.4   compiler_4.5.2    farver_2.1.2      textshaping_1.0.4 permute_0.9-8    
+htmltools_0.5.8.1 sass_0.4.10       yaml_2.3.10       pillar_1.11.1     crayon_1.5.3      jquerylib_0.1.4  
+MASS_7.3-65       rsconnect_1.6.1   cachem_1.1.0      vegan_2.7-2       boot_1.3-32       nlme_3.1-168     
+tidyselect_1.2.1  digest_0.6.38     stringi_1.8.7     splines_4.5.2     labeling_0.4.3    fastmap_1.2.0    
+grid_4.5.2        colorspace_2.1-2  cli_3.6.5         magrittr_2.0.4    withr_3.0.2       bit64_4.6.0-1    
+timechange_0.3.0  rmarkdown_2.30    bit_4.6.0         hms_1.1.4         evaluate_1.0.5    viridisLite_0.4.2
+mgcv_1.9-3        rlang_1.1.6       glue_1.8.0        xml2_1.4.1        svglite_2.2.2     rstudioapi_0.17.1
+vroom_1.6.6       jsonlite_2.0.0    R6_2.6.1          systemfonts_1.3.1
+
+---
+
+*Synthetic data generated for teaching purposes.*

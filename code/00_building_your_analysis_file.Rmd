@@ -1,0 +1,613 @@
+---
+title: "School-to-Work Pathways: Building Your Analysis File"
+subtitle: "Module 0 — Preparing State Longitudinal Data for Sequence Analysis"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width  = 9,
+  fig.height = 5.5
+)
+```
+
+---
+
+# Overview
+
+This is a preparatory module for researchers who are working with their own
+state longitudinal data and want to replicate or adapt the sequence analysis
+approach used in the Sequences to Success in Washington State project.
+
+**If you are using the toy dataset provided in this repository, you can skip
+this module.** The toy dataset is already structured and ready to use with
+Modules 1, 2, and 3.
+
+This module covers:
+
+1. The structure your raw data needs to be in before you begin
+2. Key decisions you will need to make, with the approach we took and why
+3. Code for transforming raw enrollment and wage records into a
+   sequence-ready wide format file
+4. Alternative approaches for researchers whose data or research questions
+   differ from ours
+   
+   
+   
+**Output files**
+This module produces the following output files, which are saved to your output 
+folder and are required for Modules 1, 2, and 3:
+
+- combined_seq_long.csv — the combined enrollment and employment states in long format
+- combined_seq_wide.csv — the combined states pivoted to wide format, used as the 
+primary input for sequence analysis
+
+
+**A note on scope:** This module is intentionally focused.
+Rather than trying to cover every possible data structure or research design,
+we walk through the specific decisions we made for the Sequences to Success
+project and explain the reasoning behind each one. Where our approach may not
+fit your context, we flag alternatives for you to explore.
+
+**A note on package versions:** The code in this module was developed and tested 
+using specific versions of R and its packages. If you encounter unexpected 
+errors or differences in output, it may be due to package version differences. 
+See the [Session information] section at the end of this module for the full 
+list of package versions used in development. You can check your own package 
+versions by running sessionInfo() in your RStudio console, and update packages 
+by running update.packages().
+
+
+---
+
+# 1. Setup
+
+## 1.1 Setting up your working directory
+
+Before running any code in this module, you need to make sure R knows where to 
+find your files. The working directory is the folder on your computer that R 
+looks in by default when reading or saving files.
+
+If you are using an R Project (recommended): Open the .Rproj file in the 
+repository folder. RStudio will automatically set your working directory to the 
+project folder, and all file paths in this module will work without any changes.
+
+If you are not using an R Project: Set your working directory manually by 
+running the following in your RStudio console, replacing the path with the 
+location of your repository folder on your computer:
+
+```{r set-working-directory}
+
+setwd("path/to/your/repository/folder")
+
+```
+
+# For example, on a Mac: setwd("/Users/yourname/Documents/sequences-to-success")
+# For example, on a PC: setwd("C:/Users/yourname/Documents/sequences-to-success")
+
+You can also set the working directory by going to Session > Set Working 
+Directory > Choose Directory in the RStudio menu and navigating to the repository 
+folder.
+
+## 1.2 Load packages
+
+```{r load-packages}
+library(tidyverse)   # dplyr, tidyr, purrr, etc.
+library(scales)      # for formatting
+library(knitr)       # for clean table output
+library(kableExtra)  # for enhanced table formatting
+
+# If any of these are not installed, run:
+# install.packages(c("tidyverse", "scales", "knitr", "kableExtra"))
+```
+
+---
+
+# 2. What your raw data needs to look like
+
+Sequence analysis requires that you can place each student in a defined
+**state** at each point in time. To do this, you need at minimum:
+
+- An **enrollment file** with one row per student per enrollment spell (or
+  per term), showing institution type and enrollment dates or term identifiers
+- A **wage or employment file** with one row per student per quarter showing
+  whether the student was employed and their earnings
+
+Both files should share a common student identifier so they can be linked.
+
+The toy dataset in this repository was generated to mimic these two source
+files. If you are working with real state data, your enrollment file likely
+comes from a postsecondary enrollment system (such as a state higher education
+data system) and your wage file comes from Unemployment Insurance (UI) wage
+records.
+
+---
+
+# 3. Key decisions
+
+Before writing any code, you will need to make several decisions about how to
+handle your data. This section describes the decisions we made for the
+Sequences to Success project and the reasoning behind each one.
+
+## 3.1 Defining the time spine
+
+**The decision:** We used calendar quarters as our unit of time, with one
+observation per student per quarter across a 6.5-year follow-up window (26
+quarters total).
+
+**Why we made this choice:** UI wage records are reported quarterly, so
+quarters are the natural unit for employment data. Aligning enrollment to
+the same quarterly spine made it straightforward to combine enrollment and
+employment into a single state for each time period.
+
+**How we handled term-to-quarter alignment:** Postsecondary enrollment is
+reported by term (fall, winter, spring, summer) rather than by quarter. We
+mapped each term to the calendar quarters it overlapped with. For example,
+if spring term ran from February through May, a student enrolled in spring
+term would be counted as enrolled in both Q1 (January-March) and Q2
+(April-June). This means a student can be counted as enrolled in more
+quarters than the number of terms they attended, which slightly overcounts
+enrollment at term boundaries. We considered this an acceptable tradeoff for
+the simplicity it provides.
+
+**Alternatives to consider:**
+
+- **Semester-based systems:** If your state uses semesters rather than
+  quarters, you could define your time spine as semesters instead. You
+  would then need to decide how to align wage data, which is quarterly,
+  to a semester spine (e.g., assign wages to the semester with the most
+  overlap, or average across the two quarters that fall within each semester).
+- **Fall/Spring only:** Some researchers exclude summer and winter terms if
+  enrollment in those terms is sparse or inconsistently reported. If you
+  take this approach, note that students who attend primarily in summer or
+  winter terms may be misclassified.
+- **Shorter or longer follow-up windows:** Our analysis was limited to 6.5 years 
+  due to data availability at the time. This was sufficient to capture 
+  bachelor's degree completion for most students in our cohort. Depending on 
+  your research question, a shorter window (e.g., 4 years) or longer window 
+  may be more appropriate.
+
+
+## 3.2 Handling concurrent enrollment
+
+**The decision:** When a student was enrolled at both a community/technical
+college (CTC) and a 4-year institution in the same quarter, we coded that
+quarter as 4-year enrollment (4YR).
+
+**Why we made this choice:** Concurrent enrollment may reflect a student
+who is primarily pursuing a bachelor's degree while taking a course or two
+at a CTC. Coding these students as 4YR preserves their likely credential
+trajectory and avoids overstating CTC enrollment.
+
+**Alternatives to consider:**
+
+- **Code as CTC:** If your research question focuses on CTC participation,
+  you may prefer to count any CTC enrollment, including concurrent
+  enrollment, as CTC.
+- **Create a separate "concurrent" state:** If concurrent enrollment is
+  common in your data and you want to study it explicitly, you could add a
+  seventh state (e.g., `Both`) to capture students enrolled at both types
+  of institutions simultaneously.
+- **Use the primary institution:** Some states designate a primary
+  institution for students with concurrent enrollment. If that information
+  is available, you could use it to assign a single institution type.
+
+## 3.3 Combining enrollment and employment into a single state
+
+**The decision:** For the toy data set, we combined enrollment status and 
+employment status into a single state for each quarter, producing six possible 
+states:
+
+| State        | Meaning                                              |
+|--------------|------------------------------------------------------|
+| `4YR_Work`   | Enrolled at 4-year college AND employed              |
+| `4YR_NoWork` | Enrolled at 4-year college, not employed             |
+| `CTC_Work`   | Enrolled at CTC AND employed                         |
+| `CTC_NoWork` | Enrolled at CTC, not employed                        |
+| `Work_Only`  | Not enrolled, employed                               |
+| `Neither`    | Not enrolled, not employed                           |
+
+**Why we made this choice:** Combining enrollment and employment into a
+single state captures a wide range of student experiences, including the
+common pattern of working while enrolled. A student who attends a 4-year
+college while working part-time has a meaningfully different experience from
+one who attends full-time without working, and the combined state reflects
+that difference. 
+
+**NOTE:** For the larger project, we explored several versions of state
+definitions, including concurrent work and enrollment. HOwever, our team
+was ultimately focused on postsecondary pathways, so we landed on a version
+of the states that prioritized enrollment and also captured credential 
+attainment at each quarter (e.g., "enrolled in 4-YR with Associate's degree
+already earned" or "working, not enrolled with bachelor's degree already 
+earned").
+
+**Alternatives to consider:**
+
+- **Enrollment only:** If your research question focuses on postsecondary
+  pathways rather than labor market connection, you could use enrollment
+  status alone (CTC, 4YR, None) as your state. This produces a simpler
+  sequence with fewer states and may be easier to interpret. Like our team
+  did for our larger project, you could choose to also code credential 
+  attainment into your states. 
+- **Enrollment priority:** Similar to our approach for the project, you could
+  use an enrollment-priority approach, where a student's state is
+  determined by their enrollment status alone regardless of employment. 
+  Employment can then be analyzed separately as an outcome. This is a cleaner 
+  approach if you want to keep the pathway and outcome analyses separate.
+
+
+## 3.4 Handling missing data
+
+**The decision:** When a student did not appear in either the enrollment or
+the wage records for a given quarter, we coded that quarter as `Neither`
+(not enrolled, not employed).
+
+**Why we made this choice:** Administrative records capture students when
+they are active in a system. Absence from both records is the best available
+evidence that a student was neither enrolled nor employed in that period.
+Creating a separate "missing" state would conflate true absence from both
+systems with data quality issues, and would complicate the sequence analysis
+by adding a state that is difficult to interpret substantively.
+
+**Alternatives to consider:**
+
+- **Treat as missing:** If you have reason to believe that data gaps reflect
+  true data quality issues rather than absence from both systems, you may
+  want to flag these quarters as missing rather than coding them as Neither.
+  TraMineR can handle missing values in sequences, though they require
+  careful handling in distance computation.
+- **Imputation:** For short gaps (e.g., a single quarter surrounded by
+  enrollment quarters), you could impute the state based on surrounding
+  quarters. This is most appropriate when gaps likely reflect administrative
+  reporting lags rather than true stop-outs.
+
+---
+
+# 4. Transforming your data
+
+This section provides code for transforming raw enrollment and wage records
+into the combined state sequence file used in Modules 2 and 3. The code
+is written to work with the toy dataset but is structured to be adaptable
+to real state data.
+
+## 4.1 Define the time spine
+
+```{r define-spine}
+# Define the quarterly time spine for the analysis.
+# Adjust the start year, end year, and cohort graduation year to match your data.
+
+cohort_grad_year <- 2016   # high school graduation year for your cohort
+start_year       <- 2017   # first year of follow-up
+end_year         <- 2023   # last year of follow-up
+
+# Generate all quarters in the follow-up window
+time_spine <- expand_grid(
+  year    = start_year:end_year,
+  quarter = 1:4
+) %>%
+  mutate(
+    calendar_quarter = paste0(year, "Q", quarter),
+    quarter_number   = row_number(),
+    # Approximate start and end months for each quarter
+    month_start = (quarter - 1) * 3 + 1,
+    month_end   = quarter * 3
+  )
+
+# How many quarters are we tracking?
+n_quarters <- nrow(time_spine)
+cat("Tracking", n_quarters, "quarters from", start_year, "Q1 to", end_year, "Q4\n")
+```
+**Note:** We ultimately started our sequence data at the 3rd quarter of the 
+graduation year to reflect that many students graduate in May or June and would
+be unlikely to start attending college before Q3.
+
+## 4.2 Map enrollment terms to quarters
+
+This step converts term-based enrollment records into quarterly enrollment
+indicators. Each term is mapped to every quarter it overlaps with.
+
+```{r map-terms-to-quarters}
+# Load the raw enrollment data
+# Expected columns: student_id, term_start_month, term_start_year,
+#                   term_end_month, term_end_year, institution_type (CTC or 4YR)
+#
+# For the toy dataset, we use the pre-built enrollment_long file which already
+# has quarterly enrollment. If you are working with real data, you will need
+# to map your term dates to quarters using the logic below.
+
+data_dir <- "longitudinal_toy_data"
+enrollment_long <- read_csv(file.path(data_dir, "enrollment_long.csv"))
+
+# --- For real state data, use this approach: ---
+#
+# enrollment_quarterly <- enrollment_raw %>%
+#   # For each enrollment record, identify which quarters it overlaps with
+#   rowwise() %>%
+#   mutate(quarters_enrolled = list(
+#     time_spine %>%
+#       filter(
+#         # Quarter overlaps with term if term starts before quarter ends
+#         # and term ends after quarter starts
+#         !(term_end_year < year | (term_end_year == year & term_end_month < month_start)) &
+#         !(term_start_year > year | (term_start_year == year & term_start_month > month_end))
+#       ) %>%
+#       pull(calendar_quarter)
+#   )) %>%
+#   unnest(quarters_enrolled) %>%
+#   # Handle concurrent enrollment: if a student has both CTC and 4YR in
+#   # the same quarter, keep only 4YR (our project decision — see Section 3.2)
+#   group_by(student_id, quarters_enrolled) %>%
+#   summarise(
+#     institution_type = if_else(any(institution_type == "4YR"), "4YR", "CTC"),
+#     .groups = "drop"
+#   )
+```
+
+## 4.3 Create the quarterly employment indicator
+
+```{r create-employment}
+# Load the raw wage records
+# Expected columns: student_id, calendar_quarter, quarterly_wages
+#
+# A student is considered employed in a quarter if they have positive wages
+# in that quarter in the UI wage records.
+
+wages_long <- read_csv(file.path(data_dir, "wage_records_long.csv"))
+
+# Create a simple employed/not-employed indicator
+# Adjust the minimum wage threshold to match your state's definition
+MIN_QUARTERLY_WAGES <- 100  # minimum quarterly wages to be considered employed
+
+employment_quarterly <- wages_long %>%
+  mutate(
+    employed = case_when(
+      is.na(quarterly_wages)          ~ 0L,
+      quarterly_wages >= MIN_QUARTERLY_WAGES ~ 1L,
+      TRUE                            ~ 0L
+    )
+  ) %>%
+  select(student_id, quarter_number, calendar_quarter, employed, quarterly_wages)
+
+cat("Employment records:", nrow(employment_quarterly), "rows\n")
+cat("Students with any employment:", 
+    employment_quarterly %>% 
+      filter(employed == 1) %>% 
+      pull(student_id) %>% 
+      n_distinct(), "\n")
+```
+
+## 4.4 Build the combined state sequence
+
+This is the core transformation step. For each student and each quarter, we
+combine their enrollment status and employment status into a single state.
+
+```{r build-combined-states}
+# Create a full student x quarter grid so every student has a row for
+# every quarter, even if they do not appear in either source file
+students <- read_csv(file.path(data_dir, "students.csv"))
+
+full_grid <- expand_grid(
+  student_id     = students$student_id,
+  quarter_number = 1:n_quarters
+) %>%
+  left_join(
+    time_spine %>% select(quarter_number, calendar_quarter),
+    by = "quarter_number"
+  )
+
+# Join enrollment status onto the full grid
+enroll_quarterly <- enrollment_long %>%
+  select(student_id, term_number, enrollment_status) %>%
+  rename(quarter_number = term_number)
+
+full_grid <- full_grid %>%
+  left_join(enroll_quarterly, by = c("student_id", "quarter_number")) %>%
+  # Students not in the enrollment file in a given quarter are not enrolled
+  mutate(enrollment_status = replace_na(enrollment_status, "None"))
+
+# Join employment status onto the full grid
+full_grid <- full_grid %>%
+  left_join(
+    employment_quarterly %>% select(student_id, quarter_number, employed),
+    by = c("student_id", "quarter_number")
+  ) %>%
+  # Students not in the wage file in a given quarter are not employed
+  # (see Section 3.4 for discussion of this decision)
+  mutate(employed = replace_na(employed, 0L))
+
+# Assign the combined state
+combined_seq_long <- full_grid %>%
+  mutate(
+    combined_state = case_when(
+      enrollment_status == "4YR" & employed == 1 ~ "4YR_Work",
+      enrollment_status == "4YR" & employed == 0 ~ "4YR_NoWork",
+      enrollment_status == "CTC" & employed == 1 ~ "CTC_Work",
+      enrollment_status == "CTC" & employed == 0 ~ "CTC_NoWork",
+      enrollment_status == "None" & employed == 1 ~ "Work_Only",
+      enrollment_status == "None" & employed == 0 ~ "Neither"
+    )
+  ) %>%
+  select(student_id, quarter_number, calendar_quarter, combined_state)
+
+# Quick check: state distribution
+combined_seq_long %>%
+  count(combined_state) %>%
+  mutate(pct = percent(n / sum(n), accuracy = 0.1)) %>%
+  arrange(desc(n)) %>%
+  kable(caption = "Combined state distribution across all students and quarters") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+## 4.5 Pivot to wide format
+
+Modules 2 and 3 require the sequence data in wide format, with one row per
+student and one column per quarter.
+
+```{r pivot-wide}
+combined_seq_wide <- combined_seq_long %>%
+  select(student_id, quarter_number, combined_state) %>%
+  pivot_wider(
+    names_from  = quarter_number,
+    names_prefix = "cstate_",
+    values_from = combined_state
+  )
+
+cat("Wide format dimensions:", nrow(combined_seq_wide), "rows x",
+    ncol(combined_seq_wide), "columns\n")
+
+# Preview first few rows and columns
+combined_seq_wide[1:5, 1:8]
+```
+
+## 4.6 Save the output
+
+```{r save-output}
+# Save the combined sequence files for use in Modules 2 and 3.
+# If you are working with real state data, adjust the output path as needed.
+
+output_dir <- "longitudinal_toy_data"
+
+#write_csv(combined_seq_long, file.path(output_dir, "combined_seq_long.csv"))
+#write_csv(combined_seq_wide, file.path(output_dir, "combined_seq_wide.csv"))
+
+cat("Files saved to", output_dir, "\n")
+```
+
+---
+
+# 5. Checks before moving on
+
+Before proceeding to Module 1, it is worth running a few quick checks to
+make sure your analysis file looks as expected.
+
+```{r checks}
+# 1. Do all students have the expected number of quarters?
+combined_seq_long %>%
+  count(student_id) %>%
+  summarise(
+    min_quarters  = min(n),
+    max_quarters  = max(n),
+    all_complete  = all(n == n_quarters)
+  ) %>%
+  kable(caption = "Completeness check: quarters per student") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+# 2. Are there any unexpected state values?
+combined_seq_long %>%
+  filter(!combined_state %in% c("4YR_Work", "4YR_NoWork", "CTC_Work",
+                                 "CTC_NoWork", "Work_Only", "Neither")) %>%
+  nrow() %>%
+  { cat("Rows with unexpected state values:", ., "\n") }
+
+# 3. What share of students are ever enrolled? Ever employed?
+combined_seq_long %>%
+  group_by(student_id) %>%
+  summarise(
+    ever_enrolled = any(combined_state %in% c("4YR_Work", "4YR_NoWork",
+                                               "CTC_Work", "CTC_NoWork")),
+    ever_employed = any(combined_state %in% c("4YR_Work", "CTC_Work",
+                                               "Work_Only"))
+  ) %>%
+  summarise(
+    pct_ever_enrolled = percent(mean(ever_enrolled), accuracy = 0.1),
+    pct_ever_employed = percent(mean(ever_employed), accuracy = 0.1)
+  ) %>%
+  kable(caption = "Share of students ever enrolled and ever employed") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+
+# 4. What does employment look like in the final year?
+combined_seq_long %>%
+  filter(quarter_number %in% (n_quarters - 3):n_quarters) %>%
+  group_by(quarter_number) %>%
+  summarise(
+    pct_employed = percent(
+      mean(combined_state %in% c("4YR_Work", "CTC_Work", "Work_Only")),
+      accuracy = 0.1
+    )
+  ) %>%
+  kable(caption = "Employment rate in final four quarters") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+---
+
+# Next steps
+
+Once you have confirmed that your combined sequence file looks reasonable,
+you are ready to move on to the core modules:
+
+- **Module 1** (`01_data_prep_and_visualization.Rmd`) — Descriptive summaries
+  of demographics, enrollment patterns, credential attainment, and labor
+  market outcomes
+- **Module 2** (`02_sequence_analysis.Rmd`) — Defining and visualizing
+  sequences, computing pairwise distances using Optimal Matching
+- **Module 3** (`03_cluster_analysis.Rmd`) — Clustering sequences into
+  pathway groups and examining outcomes by cluster
+  
+  
+**You have now built your analysis file.** The following files have been saved 
+and are ready to use in the analysis modules:
+
+- combined_seq_long.csv — used for descriptive summaries in Module 1
+- combined_seq_wide.csv — used as the primary input for sequence analysis in Module 2
+
+Open 01_data_prep_and_visualization.Rmd to continue to the next step, where you 
+will explore the structure and patterns of your data before moving into the 
+sequence analysis.
+
+---
+
+# Session information
+
+The code in this module was developed and tested using the package versions 
+listed below. If you encounter unexpected errors, checking your package 
+versions against these is a good first troubleshooting step. You can update 
+packages by running `update.packages()` in your RStudio console.
+
+```{r session-info}
+sessionInfo()
+```
+**Development Session Info**
+R version 4.5.2 (2025-10-31)
+Platform: x86_64-pc-linux-gnu
+Running under: Red Hat Enterprise Linux 9.8 (Plow)
+
+Matrix products: default
+BLAS/LAPACK: FlexiBLAS OPENBLAS-OPENMP;  LAPACK version 3.9.0
+
+locale:
+LC_CTYPE=C.UTF-8       LC_NUMERIC=C           LC_TIME=C.UTF-8        LC_COLLATE=C.UTF-8     LC_MONETARY=C.UTF-8   
+LC_MESSAGES=C.UTF-8    LC_PAPER=C.UTF-8       LC_NAME=C              LC_ADDRESS=C           LC_TELEPHONE=C        
+LC_MEASUREMENT=C.UTF-8 LC_IDENTIFICATION=C   
+
+time zone: America/New_York
+tzcode source: system (glibc)
+
+attached base packages:
+stats     graphics  grDevices utils     datasets  methods   base     
+
+other attached packages:
+kableExtra_1.4.0 knitr_1.50       scales_1.4.0     lubridate_1.9.4  forcats_1.0.1    stringr_1.6.0    dplyr_1.1.4     
+purrr_1.2.0      readr_2.1.6      tidyr_1.3.1      tibble_3.3.0     ggplot2_4.0.1    tidyverse_2.0.0 
+
+loaded via a namespace (and not attached):
+sass_0.4.10        generics_0.1.4     xml2_1.4.1         stringi_1.8.7      hms_1.1.4          digest_0.6.38     
+magrittr_2.0.4     evaluate_1.0.5     grid_4.5.2         timechange_0.3.0   RColorBrewer_1.1-3 fastmap_1.2.0     
+jsonlite_2.0.0     viridisLite_0.4.2  jquerylib_0.1.4    textshaping_1.0.4  cli_3.6.5          rlang_1.1.6       
+crayon_1.5.3       bit64_4.6.0-1      cachem_1.1.0       withr_3.0.2        yaml_2.3.10        tools_4.5.2       
+parallel_4.5.2     tzdb_0.5.0         vctrs_0.6.5        R6_2.6.1           lifecycle_1.0.4    bit_4.6.0         
+vroom_1.6.6        pkgconfig_2.0.3    bslib_0.9.0        pillar_1.11.1      gtable_0.3.6       rsconnect_1.6.1   
+glue_1.8.0         systemfonts_1.3.1  xfun_0.54          tidyselect_1.2.1   rstudioapi_0.17.1  farver_2.1.2      
+htmltools_0.5.8.1  rmarkdown_2.30     svglite_2.2.2      compiler_4.5.2     S7_0.2.1          
+

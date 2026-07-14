@@ -1,0 +1,553 @@
+---
+title: "School-to-Work Pathways: Data Preparation and Visualization"
+subtitle: "Module 1 of 3 — Using Synthetic Longitudinal Data"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,     # show all code by default
+  message = FALSE,    # suppress package load messages
+  #warning = FALSE,    # suppress warnings in output
+  fig.width  = 9,
+  fig.height = 5.5
+)
+```
+
+---
+
+# Overview
+
+This is the first of three modules in a series on using **sequence analysis** and 
+**cluster analysis** to study school-to-work pathways in longitudinal administrative data.
+
+This module covers:
+
+1. Loading and inspecting the synthetic longitudinal dataset
+2. Understanding the structure of the raw data tables
+3. Exploring demographic and high school characteristics
+4. Describing postsecondary enrollment and credential patterns
+5. Summarizing labor market outcomes by pathway
+
+
+**Output files**
+This module does not produce any output files. It is focused on exploring and 
+understanding the data before moving into the analysis. All files needed for 
+Modules 2 and 3 are either provided in the longitudinal_toy_data/ folder or 
+produced by Module 0.
+
+
+**Data note:** All data used in these modules are fully synthetic and were 
+generated for teaching purposes only. The patterns are illustrative and do not 
+represent any real state, institution, or individual.
+
+
+**A note on package versions:** The code in this module was developed and tested 
+using specific versions of R and its packages. If you encounter unexpected 
+errors or differences in output, it may be due to package version differences. 
+See the [Session information] section at the end of this module for the full 
+list of package versions used in development. You can check your own package 
+versions by running sessionInfo() in your RStudio console, and update packages 
+by running update.packages().
+
+---
+
+# 1. Setup
+
+## 1.1 Load packages
+
+```{r load-packages}
+# Core data manipulation and visualization
+library(tidyverse)   # dplyr, ggplot2, tidyr, purrr, etc.
+library(scales)      # for formatting axes (dollar signs, percents, etc.)
+library(knitr)       # for clean table display with kable()
+library(kableExtra)  # for enhanced table formatting
+
+# If any of these are not installed, run:
+# install.packages(c("tidyverse", "scales", "knitr", "kableExtra"))
+```
+
+## 1.2 Load the data
+
+The synthetic dataset consists of several linked tables. We load each one 
+separately and then join them as needed for analysis. All tables share a 
+common `student_id` key.
+
+```{r load-data}
+# Adjust this path to match the location of the folder where you have stored the data files.
+data_dir <- "/data/share/cdi/Sequences to Success in WA/Quantitative/GitHub Repo/longitudinal_toy_data"
+
+# --- Core tables ---
+
+# One row per student; static demographic characteristics
+students <- read_csv(file.path(data_dir, "students.csv"))
+
+# One row per student; high school GPA, FRPL, diploma type, dual credit flag
+hs_records <- read_csv(file.path(data_dir, "hs_records.csv"))
+
+# One row per student × term; enrollment status each term (CTC, 4YR, None)
+enrollment_long <- read_csv(file.path(data_dir, "enrollment_long.csv"))
+
+# One row per credential earned; certificate, associate's, or bachelor's
+credentials <- read_csv(file.path(data_dir, "credentials.csv"))
+
+# One row per student × quarter; quarterly wages and employment indicator
+wages_long <- read_csv(file.path(data_dir, "wage_records_long.csv"))
+
+# wide version
+wages_wide <- read_csv(file.path(data_dir, "wage_records_wide.csv"))
+
+
+# --- Pre-built analysis-ready table ---
+
+# One row per student with demographics, HS record, credential summary,
+# and aggregate labor market outcomes merged together
+analysis_flat <- read_csv(file.path(data_dir, "analysis_flat.csv"))
+
+# --- Sequence-ready wide tables (used in Modules 2 and 3) ---
+
+# One column per term showing enrollment state (wide format for TraMineR)
+enrollment_wide <- read_csv(file.path(data_dir, "enrollment_wide.csv"))
+
+# One column per term showing combined enrollment + employment state
+combined_wide <- read_csv(file.path(data_dir, "combined_seq_wide.csv"))
+
+#long version
+combined_long <- read_csv(file.path(data_dir, "combined_seq_long.csv"))
+```
+
+---
+
+# 2. Data structure
+
+Before analyzing, it is important to understand the shape and content of each 
+table. This section inspects each one briefly.
+
+## 2.1 Students table
+
+```{r inspect-students}
+# glimpse() is the tidyverse equivalent of str() — it shows column names,
+# types, and the first few values in a compact format
+glimpse(students)
+```
+
+```{r students-n}
+# How many students are in the cohort?
+nrow(students)
+```
+
+## 2.2 Enrollment table (long format)
+
+The enrollment table is in **long format**: each student has one row per term. 
+This is the natural format for administrative records and is easy to reshape 
+for visualization or sequence analysis.
+
+```{r inspect-enrollment}
+glimpse(enrollment_long)
+
+# Preview: one student's enrollment history across all terms
+enrollment_long %>%
+  filter(student_id == "STU000001") %>%
+  select(term_label, enrollment_status)
+```
+
+## 2.3 Wage records (long format)
+
+```{r inspect-wages}
+glimpse(wages_long)
+
+# Preview: one student's wage history across all quarters
+wages_long %>%
+  filter(student_id == "STU000016") %>%
+  select(calendar_quarter, employed, quarterly_wages)
+```
+
+## 2.4 Analysis-ready flat file
+
+The flat file merges everything into one row per student. This is convenient 
+for regression models, cross-tabulations, and outcome comparisons — but it 
+collapses the time dimension, so it cannot be used for sequence analysis.
+
+```{r inspect-flat}
+glimpse(analysis_flat)
+```
+
+---
+
+# 3. Demographic characteristics
+
+## 3.1 Race and ethnicity
+
+```{r race-eth-table}
+students %>%
+  count(race_ethnicity) %>%
+  mutate(
+    pct = n / sum(n),
+    pct_label = percent(pct, accuracy = 0.1)
+  ) %>%
+  arrange(desc(n)) %>%
+  kable(
+    col.names = c("Race/Ethnicity", "N", "Proportion", "Percent"),
+    caption   = "Distribution of race/ethnicity in the synthetic cohort"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+```{r race-eth-plot}
+students %>%
+  count(race_ethnicity) %>%
+  mutate(
+    race_ethnicity = fct_reorder(race_ethnicity, n),
+    pct = n / sum(n)
+  ) %>%
+  ggplot(aes(x = race_ethnicity, y = pct)) +
+  geom_col(fill = "#2E86AB", alpha = 0.85) +
+  geom_text(aes(label = percent(pct, accuracy = 0.1)),
+            hjust = -0.1, size = 3.5) +
+  coord_flip() +
+  scale_y_continuous(labels = percent_format(), limits = c(0, 0.6)) +
+  labs(
+    title = "Race/Ethnicity Distribution",
+    x     = NULL,
+    y     = "Share of cohort"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+## 3.2 Key demographic indicators
+
+```{r demo-summary}
+# Summarize binary demographic indicators as percentages
+students %>%
+  summarise(
+    `% Female`      = mean(sex == "Female"),
+    `% FRPL`        = mean(frpl == 1),
+    `% Rural`       = mean(rural_flag == 1),
+    `% First-gen`   = mean(first_gen == 1),
+    `% IEP`         = mean(iep_flag == 1),
+    `% ELL`         = mean(ell_flag == 1)
+  ) %>%
+  pivot_longer(everything(), names_to = "Indicator", values_to = "Proportion") %>%
+  mutate(Percent = percent(Proportion, accuracy = 0.1)) %>%
+  kable(caption = "Key demographic indicators") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+---
+
+# 4. High school characteristics
+
+## 4.1 GPA distribution
+
+```{r gpa-dist}
+hs_records %>%
+  ggplot(aes(x = hs_gpa)) +
+  geom_histogram(binwidth = 0.1, fill = "lightblue", color = "white", alpha = 0.85) +
+  geom_vline(aes(xintercept = median(hs_gpa, na.rm = TRUE)),
+             color = "#E84855", linetype = "dashed", linewidth = 1) +
+  annotate("text", x = median(hs_records$hs_gpa, na.rm = TRUE) + 0.05,
+           y = 120, label = paste0("Median: ",
+             round(median(hs_records$hs_gpa, na.rm = TRUE), 2)),
+           color = "darkred", hjust = 0, size = 4) +
+  labs(
+    title = "High School GPA Distribution",
+    x     = "High school GPA",
+    y     = "Number of students"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+## 4.2 Dual credit participation
+
+```{r dual-credit}
+hs_records %>%
+  summarise(
+    `Students with dual credit` = sum(dual_credit_flag == 1, na.rm = TRUE),
+    `Total students`            = n(),
+    `% with dual credit`        = percent(mean(dual_credit_flag == 1, na.rm = TRUE),
+                                           accuracy = 0.1)
+  ) %>%
+  kable(caption = "Dual credit participation") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+---
+
+# 5. Postsecondary enrollment patterns
+
+## 5.1 Ever enrolled in postsecondary education
+
+```{r ever-enrolled}
+# A student "ever enrolled" if they have at least one term with CTC or 4YR status
+ever_enrolled <- enrollment_long %>%
+  group_by(student_id) %>%
+  summarise(
+    ever_enrolled = any(enrollment_status %in% c("CTC", "4YR"), na.rm = TRUE)
+  )
+
+ever_enrolled %>%
+  count(ever_enrolled) %>%
+  mutate(pct = percent(n / sum(n), accuracy = 0.1)) %>%
+  kable(col.names = c("Ever enrolled in PSE?", "N", "Percent"),
+        caption   = "Postsecondary enrollment rate") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+## 5.2 Enrollment state distribution over time
+
+This chart shows the share of students in each enrollment state at each term. 
+It is sometimes called a **state distribution plot** or **tempogram**. You will 
+see a more polished version of this in Module 2 using TraMineR, but it is useful 
+to build it manually first to understand what is being plotted.
+
+```{r enrollment-over-time}
+# Step 1: count students in each state at each term
+# We treat NA as "Unknown" for this chart
+state_dist <- enrollment_long %>%
+  mutate(enrollment_status = replace_na(enrollment_status, "Unknown")) %>%
+  count(term_label, enrollment_status) %>%
+  group_by(term_label) %>%
+  mutate(pct = n / sum(n)) %>%
+  ungroup()
+
+# Step 2: order terms chronologically using the term_number from the long table
+term_order <- enrollment_long %>%
+  distinct(term_number, term_label) %>%
+  arrange(term_number)
+
+state_dist <- state_dist %>%
+  mutate(term_label = factor(term_label, levels = term_order$term_label))
+
+# Step 3: plot
+state_dist %>%
+  filter(enrollment_status != "Unknown") %>%
+  ggplot(aes(x = term_label, y = pct, fill = enrollment_status)) +
+  geom_col() +
+  scale_fill_manual(
+    values = c("4YR" = "#2E86AB", "CTC" = "#A23B72", "None" = "#E0E0E0"),
+    labels = c("4YR" = "4-Year College", "CTC" = "Community/Technical College",
+               "None" = "Not Enrolled")
+  ) +
+  scale_y_continuous(labels = percent_format()) +
+  labs(
+    title = "Enrollment State Distribution by Term",
+    x     = "Term",
+    y     = "Share of cohort",
+    fill  = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom")
+```
+
+## 5.3 Credential attainment
+
+```{r credential-summary}
+credentials %>%
+  count(credential_type) %>%
+  mutate(pct = percent(n / nrow(students), accuracy = 0.1)) %>%
+  kable(col.names = c("Credential type", "N students", "% of cohort"),
+        caption   = "Credential attainment by type") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+---
+
+# 6. Labor market outcomes
+
+## 6.1 Overall employment rates
+
+```{r employment-overall}
+# "Stably employed" is defined as employed all 4 quarters of the final study year
+# with total annual wages >= $14,000 (mirrors definition used for our project)
+analysis_flat %>%
+  summarise(
+    `Ever employed`    = percent(mean(ever_employed,    na.rm = TRUE), accuracy = 0.1),
+    `Stably employed`  = percent(mean(stably_employed,  na.rm = TRUE), accuracy = 0.1),
+    `Median annual wages (stably employed)` =
+      dollar(median(annual_wages_2023[stably_employed == 1], na.rm = TRUE))
+  ) %>%
+  kable(caption = "Overall labor market outcomes") %>%
+  kable_styling(bootstrap_options = "striped", full_width = FALSE)
+```
+
+## 6.2 Wage distribution (stably employed)
+
+```{r wage-dist}
+analysis_flat %>%
+  filter(stably_employed == 1) %>%
+  ggplot(aes(x = annual_wages_2023)) +
+  geom_histogram(binwidth = 3000, fill = "#2E86AB", color = "white", alpha = 0.85) +
+  geom_vline(aes(xintercept = median(annual_wages_2023, na.rm = TRUE)),
+             color = "#E84855", linetype = "dashed", linewidth = 1) +
+  scale_x_continuous(labels = dollar_format(scale = 1/1000, suffix = "K")) +
+  labs(
+    title    = "Annual Wage Distribution (Stably Employed Students)",
+    subtitle = "Dashed line = median",
+    x        = "Annual wages",
+    y        = "Number of students"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+## 6.3 Employment outcomes by credential attainment
+
+```{r outcomes-by-cred}
+analysis_flat %>%
+  mutate(
+    highest_cred = case_when(
+      earned_bachelor    == 1 ~ "Bachelor's",
+      earned_associate   == 1 ~ "Associate's",
+      earned_certificate == 1 ~ "Certificate",
+      TRUE                    ~ "No credential"
+    ),
+    highest_cred = factor(highest_cred,
+                          levels = c("No credential", "Certificate",
+                                     "Associate's", "Bachelor's"))
+  ) %>%
+  group_by(highest_cred) %>%
+  summarise(
+    N                  = n(),
+    `Ever employed`    = percent(mean(ever_employed,   na.rm = TRUE), accuracy = 0.1),
+    `Stably employed`  = percent(mean(stably_employed, na.rm = TRUE), accuracy = 0.1),
+    `Median wages`     = dollar(median(annual_wages_2023[stably_employed == 1],
+                                       na.rm = TRUE))
+  ) %>%
+  kable(caption = "Labor market outcomes by highest credential earned") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)
+```
+
+## 6.4 Employment over time
+
+This chart shows the share of students employed in each quarter over the 
+study period. Early quarters are dominated by students still in school; 
+employment rates rise as students exit education and enter the workforce.
+
+```{r employment-over-time}
+wages_long %>%
+  group_by(calendar_quarter, quarter_number) %>%
+  summarise(pct_employed = mean(employed, na.rm = TRUE), .groups = "drop") %>%
+  arrange(quarter_number) %>%
+  mutate(calendar_quarter = factor(calendar_quarter,
+                                   levels = unique(calendar_quarter))) %>%
+  ggplot(aes(x = calendar_quarter, y = pct_employed, group = 1)) +
+  geom_line(color = "#2E86AB", linewidth = 1.1) +
+  geom_point(color = "#2E86AB", size = 2) +
+  scale_y_continuous(labels = percent_format(), limits = c(0, 1)) +
+  labs(
+    title = "Share of Cohort Employed by Quarter",
+    x     = "Quarter",
+    y     = "Share employed"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## 6.5 Wages by sex
+
+Policy analyses routinely examine outcome differences by sex. 
+This plot shows wage distributions for stably employed students by sex.
+
+```{r wages-by-sex}
+analysis_flat %>%
+  filter(stably_employed == 1) %>%
+  mutate(sex = fct_reorder(sex,
+                                      annual_wages_2023, median, na.rm = TRUE)) %>%
+  ggplot(aes(x = sex, y = annual_wages_2023, fill = sex)) +
+  geom_boxplot(alpha = 0.75, outlier.size = 0.8) +
+  scale_y_continuous(labels = dollar_format(scale = 1/1000, suffix = "K")) +
+  scale_fill_brewer(palette = "Set2") +
+  coord_flip() +
+  labs(
+    title = "Annual Wage Distribution by Sex",
+    subtitle = "Among stably employed students only",
+    x     = NULL,
+    y     = "Annual wages"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none")
+```
+
+---
+
+# 7. Next steps
+
+This module covered the structure of the synthetic longitudinal data and 
+produced descriptive summaries of demographics, enrollment, credentials, and 
+labor market outcomes.
+
+**Module 2 — Sequence Analysis** builds on this by:
+
+- Defining sequences using TraMineR
+- Computing pairwise distances between sequences using Optimal Matching
+- Visualizing sequence patterns with index plots and state distribution plots
+
+**Module 3 — Cluster Analysis** builds on Module 2 by:
+
+- Applying hierarchical clustering to the distance matrix
+- Selecting the number of clusters using statistical fit criteria
+- Characterizing and labeling each cluster
+- Examining how cluster membership varies by demographics and outcomes
+
+
+**You have now completed the data preparation and visualization module.** 
+No new files were saved in this module. When you are ready to move on, open 
+02_sequence_analysis.Rmd to begin the sequence analysis, where you will define 
+student sequences, compute pairwise distances, and visualize pathway patterns 
+across the cohort.
+
+---
+
+# Session information
+
+The code in this module was developed and tested using the package versions 
+listed below. If you encounter unexpected errors, checking your package 
+versions against these is a good first troubleshooting step. You can update 
+packages by running `update.packages()` in your RStudio console.
+
+```{r session-info}
+sessionInfo()
+```
+**Development Session Info**
+R version 4.5.2 (2025-10-31)
+Platform: x86_64-pc-linux-gnu
+Running under: Red Hat Enterprise Linux 9.8 (Plow)
+
+Matrix products: default
+BLAS/LAPACK: FlexiBLAS OPENBLAS-OPENMP;  LAPACK version 3.9.0
+
+locale:
+LC_CTYPE=C.UTF-8       LC_NUMERIC=C           LC_TIME=C.UTF-8        LC_COLLATE=C.UTF-8     LC_MONETARY=C.UTF-8   
+LC_MESSAGES=C.UTF-8    LC_PAPER=C.UTF-8       LC_NAME=C              LC_ADDRESS=C           LC_TELEPHONE=C        
+LC_MEASUREMENT=C.UTF-8 LC_IDENTIFICATION=C   
+
+time zone: America/New_York
+tzcode source: system (glibc)
+
+attached base packages:
+stats     graphics  grDevices utils     datasets  methods   base     
+
+other attached packages:
+kableExtra_1.4.0 knitr_1.50       scales_1.4.0     lubridate_1.9.4  forcats_1.0.1    stringr_1.6.0    dplyr_1.1.4     
+purrr_1.2.0      readr_2.1.6      tidyr_1.3.1      tibble_3.3.0     ggplot2_4.0.1    tidyverse_2.0.0 
+
+loaded via a namespace (and not attached):
+sass_0.4.10        generics_0.1.4     xml2_1.4.1         stringi_1.8.7      hms_1.1.4          digest_0.6.38     
+magrittr_2.0.4     evaluate_1.0.5     grid_4.5.2         timechange_0.3.0   RColorBrewer_1.1-3 fastmap_1.2.0     
+jsonlite_2.0.0     viridisLite_0.4.2  jquerylib_0.1.4    textshaping_1.0.4  cli_3.6.5          rlang_1.1.6       
+crayon_1.5.3       bit64_4.6.0-1      cachem_1.1.0       withr_3.0.2        yaml_2.3.10        tools_4.5.2       
+parallel_4.5.2     tzdb_0.5.0         vctrs_0.6.5        R6_2.6.1           lifecycle_1.0.4    bit_4.6.0         
+vroom_1.6.6        pkgconfig_2.0.3    bslib_0.9.0        pillar_1.11.1      gtable_0.3.6       rsconnect_1.6.1   
+glue_1.8.0         systemfonts_1.3.1  xfun_0.54          tidyselect_1.2.1   rstudioapi_0.17.1  farver_2.1.2      
+htmltools_0.5.8.1  labeling_0.4.3     rmarkdown_2.30     svglite_2.2.2      compiler_4.5.2     S7_0.2.1          
+
+---
+
+*Synthetic data generated for demonstration purposes.
