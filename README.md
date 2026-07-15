@@ -94,6 +94,20 @@ Students are assigned to one of **12 fictional pathway archetypes** ranging from
 
 The data files listed in the table below are included in the longitudinal_toy_data/ folder for your use.
 
+| File | Description |
+|----------|----------|
+| students.csv    | One row per student; demographic characteristics including race/ethnicity, sex, FRPL status, rural flag, first-generation status, IEP flag, and ELL flag    |
+| hs_records.csv    | One row per student; high school GPA, diploma type, FRPL status, and dual credit participation flag    |
+| enrollment_long.csv    | One row per student × term; enrollment status each term (CTC, 4YR, or None)    |
+| enrollment_wide.csv    | One row per student; enrollment status pivoted to wide format with one column per term    |
+| credentials.csv    | One row per credential earned; credential type (Certificate, Associate's, or Bachelor's) and term of completion    |
+| wage_records_long.csv    | One row per student × quarter; quarterly wages and employment indicator    |
+| wage_records_wide.csv    | One row per student; quarterly wages pivoted to wide format    |
+| employ_wide.csv    | One row per student; employment indicator pivoted to wide format    |
+| combined_seq_long.csv    | One row per student × term; combined enrollment + employment state (e.g., CTC_Work, 4YR_NoWork, Work_Only, Neither)    |
+| combined_seq_wide.csv    | One row per student; combined states pivoted to wide format; this is the primary input for sequence analysis in Modules 2 and 3    |
+| analysis_flat.csv    | One row per student; demographics, high school record, credential summary, and aggregate labor market outcomes merged into a single analysis-ready file    |
+
 # Acknowledgements
 We are grateful to the Washington State Education Research and Data Center (ERDC) for generously providing access to the data that made this research possible. Additionally, this work would not have been possible without the work and contributions of the following people:
 
