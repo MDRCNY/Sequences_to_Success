@@ -127,7 +127,10 @@ John Hutchins, MDRC<br>
 
 For questions about the code or repository materials, please contact brit.henderson@mdrc.org
 
-
+<p align="center">
+  <img src="MDRC_Logo.png" width="300" height="200">
+  <img src="WSAC.LOGO.Rectangle.png" width="700" height="200">
+</p>
 
 
 
