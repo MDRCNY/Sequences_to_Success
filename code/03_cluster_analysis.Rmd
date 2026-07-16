@@ -95,10 +95,6 @@ seqdata  <- readRDS(file.path(data_dir, "seqdata.rds"))
 analysis_flat  <- read_csv(file.path(data_dir, "analysis_flat.csv"))
 students       <- read_csv(file.path(data_dir, "students.csv"))
 combined_wide  <- read_csv(file.path(data_dir, "combined_seq_wide.csv"))
-
-# Load the archetype key — this is the "ground truth" we can use to 
-# validate whether our clustering recovers the known pathway groups
-archetype_key  <- read_csv(file.path(data_dir, "archetype_key.csv"))
 ```
 
 ---
