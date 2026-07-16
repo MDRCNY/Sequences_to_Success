@@ -85,7 +85,7 @@ library(ggridges)        # for ridge/density plots by group
 ## 1.2 Load data
 
 ```{r load-data}
-data_dir <- "longitudinal_toy_data"
+data_dir <- "synthetic_data"
 
 # Load the distance matrix and sequence object saved in Module 2
 dist_om  <- readRDS(file.path(data_dir, "dist_om.rds"))
@@ -153,6 +153,7 @@ hc <- agnes(
   diss   = TRUE,
   method = "ward"
 )
+
 
 cat("Clustering complete.\n")
 cat("Agglomerative coefficient:", round(hc$ac, 3),

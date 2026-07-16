@@ -326,7 +326,7 @@ indicators. Each term is mapped to every quarter it overlaps with.
 # has quarterly enrollment. If you are working with real data, you will need
 # to map your term dates to quarters using the logic below.
 
-data_dir <- "longitudinal_toy_data"
+data_dir <- "synthetic_data"
 enrollment_long <- read_csv(file.path(data_dir, "enrollment_long.csv"))
 
 # --- For real state data, use this approach: ---
@@ -476,7 +476,7 @@ combined_seq_wide[1:5, 1:8]
 # Save the combined sequence files for use in Modules 2 and 3.
 # If you are working with real state data, adjust the output path as needed.
 
-output_dir <- "longitudinal_toy_data"
+output_dir <- "synthetic_data"
 
 #write_csv(combined_seq_long, file.path(output_dir, "combined_seq_long.csv"))
 #write_csv(combined_seq_wide, file.path(output_dir, "combined_seq_wide.csv"))

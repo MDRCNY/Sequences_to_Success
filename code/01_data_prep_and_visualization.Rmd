@@ -82,7 +82,7 @@ common `student_id` key.
 
 ```{r load-data}
 # Adjust this path to match the location of the folder where you have stored the data files.
-data_dir <- "/data/share/cdi/Sequences to Success in WA/Quantitative/GitHub Repo/longitudinal_toy_data"
+data_dir <- "synthetic_data"
 
 # --- Core tables ---
 

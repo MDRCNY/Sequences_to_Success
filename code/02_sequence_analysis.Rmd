@@ -104,7 +104,7 @@ library(RColorBrewer)
 ## 1.2 Load data
 
 ```{r load-data}
-data_dir <- "/data/share/cdi/Sequences to Success in WA/Quantitative/GitHub Repo/longitudinal_toy_data"
+data_dir <- "synthetic_data"
 
 # The combined_seq_wide table has one row per student and one column per quarter.
 # Each cell contains the combined enrollment + employment state for that quarter.
