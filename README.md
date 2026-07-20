@@ -67,8 +67,8 @@ Annabel Utz, MDRC<br>
 Rebekah O’Donoghue, MDRC<br>
 Joshua Vermette, MDRC<br>
 Ashley Alvarez, MDRC<br>
-Richard Dorsett<br> 
-Homar Maurás-Rodríguez<br>
+Richard Dorsett, University of Westminster<br> 
+Homar Maurás-Rodríguez, WSAC<br>
 Dan Oliver, WSAC<br>
 Isaac Kwakye, WSAC<br>
 Richard Hendra, MDRC<br>
