@@ -77,7 +77,7 @@ Isaac Kwakye, WSAC<br>
 Richard Hendra, MDRC<br>
 John Hutchins, MDRC<br>
 
-For questions about the code or repository materials, please contact brit.henderson@mdrc.org
+For questions about the code or repository materials, please contact SequencesWA@mdrc.org
 
 <p align="center">
   <img src="MDRC_Logo.png" width="225" height="300">
