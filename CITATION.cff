@@ -13,7 +13,7 @@ authors:
   - family-names: Syed
     given-names: Sufiyan
     affiliation: MDRC
-contact:
+institution:
   - name: MDRC
     website: "https://www.mdrc.org"
 abstract: "Open-source code repository accompanying the Sequences to Success in
