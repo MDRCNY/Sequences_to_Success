@@ -62,8 +62,7 @@ The data files listed in the table below are included in the longitudinal_toy_da
 | analysis_flat.csv    | One row per student; demographics, high school record, credential summary, and aggregate labor market outcomes merged into a single, analysis-ready file    |
 
 # Acknowledgements
-We are grateful to the Washington State Education Research and Data Center (ERDC) for generously providing access to the data that made this research possible.
-Additionally, this work would not have been possible without the work and contributions of the following people:
+This project would not have been possible without the work and contributions of the following people:
 
 Dani Fumia, ERDC<br>
 KC Deane, WSAC<br>
