@@ -13,9 +13,9 @@ authors:
   - family-names: Syed
     given-names: Sufiyan
     affiliation: MDRC
-institution:
+publisher:
   - name: MDRC
-    website: "https://www.mdrc.org"
+    city: New York
 abstract: "Open-source code repository accompanying the Sequences to Success in
   Washington State project, a collaborative effort between MDRC and the Washington
   Student Achievement Council (WSAC). Provides a practical toolkit for researchers
